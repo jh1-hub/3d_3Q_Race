@@ -1,4 +1,5 @@
-import { BookOpen, MapPin, Play, RotateCcw, Trophy } from 'lucide-react';
+import { useState } from 'react';
+import { Car, Cpu, MapPin, Play, RotateCcw, Trophy } from 'lucide-react';
 import {
   CourseId,
   COURSES,
@@ -39,6 +40,8 @@ export function MenuOverlay({
   onReturnMenu,
   onOpenCollection,
 }: MenuOverlayProps) {
+  const [mobileTab, setMobileTab] = useState<'course' | 'machine'>('course');
+
   const totalTermCount = getAllFlatTerms().length;
   const collectedCount = Object.keys(collection).length;
   const activeCourse = COURSES.find((c) => c.id === selectedCourse) ?? COURSES[0];
@@ -46,49 +49,49 @@ export function MenuOverlay({
   if (telemetry.phase === 'finished') {
     const finishedCourse = COURSES.find((c) => c.id === telemetry.courseId) ?? activeCourse;
     return (
-      <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center bg-[#05070e]/78 p-4 overflow-y-auto">
-        <div className="w-full max-w-2xl rounded-2xl border border-white/15 bg-[#070b14]/96 p-6 shadow-2xl">
-          <div className="flex items-center justify-between border-b border-white/10 pb-4">
+      <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center bg-[#05070e]/78 p-3 sm:p-4 overflow-y-auto">
+        <div className="w-full max-w-2xl rounded-2xl border border-white/15 bg-[#070b14]/96 p-4 sm:p-6 shadow-2xl my-auto">
+          <div className="flex items-center justify-between border-b border-white/10 pb-3.5 sm:pb-4">
             <div>
               <p className="text-xs font-medium tracking-wider text-cyan-400">
                 RACE COMPLETE · {finishedCourse.name}
               </p>
-              <h2 className="font-display text-3xl font-bold text-white">
+              <h2 className="font-display text-2xl sm:text-3xl font-bold text-white">
                 {telemetry.rank === 1 ? '1ST PLACE · VICTORY' : `${telemetry.rank}位 フィニッシュ`}
               </h2>
             </div>
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-amber-400/30 bg-amber-500/15 text-amber-400">
-              <Trophy className="h-6 w-6" />
+            <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl border border-amber-400/30 bg-amber-500/15 text-amber-400 shrink-0">
+              <Trophy className="h-5 w-5 sm:h-6 sm:w-6" />
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-3 gap-3">
-            <div className="rounded-xl border border-white/10 bg-slate-900/70 p-3">
-              <div className="text-[11px] text-slate-400">トータルタイム</div>
-              <div className="mt-1 font-mono-num text-lg sm:text-xl font-bold text-white">
+          <div className="mt-4 grid grid-cols-3 gap-2.5 sm:gap-3">
+            <div className="rounded-xl border border-white/10 bg-slate-900/70 p-2.5 sm:p-3">
+              <div className="text-[10px] sm:text-[11px] text-slate-400">トータルタイム</div>
+              <div className="mt-1 font-mono-num text-sm sm:text-xl font-bold text-white">
                 {formatRaceTime(telemetry.totalRaceMs)}
               </div>
             </div>
-            <div className="rounded-xl border border-white/10 bg-slate-900/70 p-3">
-              <div className="flex items-center justify-between text-[11px] text-slate-400">
+            <div className="rounded-xl border border-white/10 bg-slate-900/70 p-2.5 sm:p-3">
+              <div className="flex items-center justify-between text-[10px] sm:text-[11px] text-slate-400">
                 <span>ベストラップ</span>
                 {telemetry.isNewRecord && (
                   <span className="font-bold text-amber-400">NEW</span>
                 )}
               </div>
-              <div className="mt-1 font-mono-num text-lg sm:text-xl font-bold text-cyan-400">
+              <div className="mt-1 font-mono-num text-sm sm:text-xl font-bold text-cyan-400">
                 {formatRaceTime(telemetry.bestLapMs)}
               </div>
             </div>
-            <div className="rounded-xl border border-white/10 bg-slate-900/70 p-3">
-              <div className="text-[11px] text-slate-400">クイズ正答</div>
-              <div className="mt-1 font-mono-num text-lg sm:text-xl font-bold text-emerald-400">
+            <div className="rounded-xl border border-white/10 bg-slate-900/70 p-2.5 sm:p-3">
+              <div className="text-[10px] sm:text-[11px] text-slate-400">クイズ正答</div>
+              <div className="mt-1 font-mono-num text-sm sm:text-xl font-bold text-emerald-400">
                 {telemetry.quizCorrectCount} / {telemetry.quizAttempts}
               </div>
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="mt-4 grid grid-cols-1 gap-3.5 sm:gap-4 md:grid-cols-2">
             {/* Final Standings */}
             <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
               <div className="mb-2 text-[11px] font-medium text-slate-400">最終順位</div>
@@ -116,21 +119,21 @@ export function MenuOverlay({
               </div>
             </div>
 
-            {/* Earned Learning Cards */}
+            {/* Earned Learning Parts */}
             <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
               <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-slate-400">
-                <span>今回獲得した用語カード</span>
+                <span>今回獲得したパーツ</span>
                 <span className="font-mono-num text-cyan-300">
                   図鑑 {collectedCount} / {totalTermCount}
                 </span>
               </div>
 
               {telemetry.earnedCards.length === 0 ? (
-                <div className="flex h-28 items-center justify-center text-center text-xs text-slate-500">
-                  今回のレースではカードを獲得できませんでした
+                <div className="flex h-24 sm:h-28 items-center justify-center text-center text-xs text-slate-500">
+                  今回のレースではパーツを獲得できませんでした
                 </div>
               ) : (
-                <div className="max-h-40 space-y-1.5 overflow-y-auto pr-1">
+                <div className="max-h-36 sm:max-h-40 space-y-1.5 overflow-y-auto pr-1">
                   {telemetry.earnedCards.map((card, idx) => {
                     const meta = RARITY_META[card.rarity];
                     const tier = Math.min(3, card.unlockedCount);
@@ -176,11 +179,11 @@ export function MenuOverlay({
             </div>
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center gap-3">
+          <div className="mt-4 sm:mt-5 flex flex-wrap items-center gap-2.5 sm:gap-3">
             <button
               type="button"
               onClick={onStartRace}
-              className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-cyan-400 cursor-pointer whitespace-nowrap"
+              className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-cyan-400 cursor-pointer whitespace-nowrap"
             >
               <RotateCcw className="h-4 w-4" />
               再レース
@@ -188,15 +191,15 @@ export function MenuOverlay({
             <button
               type="button"
               onClick={onOpenCollection}
-              className="flex items-center justify-center gap-2 rounded-lg border border-amber-400/40 bg-amber-500/15 px-4 py-2.5 text-sm font-semibold text-amber-300 transition-colors hover:bg-amber-500/25 cursor-pointer whitespace-nowrap"
+              className="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-amber-400/40 bg-amber-500/15 px-4 py-2.5 text-sm font-semibold text-amber-300 transition-colors hover:bg-amber-500/25 cursor-pointer whitespace-nowrap"
             >
-              <BookOpen className="h-4 w-4" />
-              Card Collection
+              <Cpu className="h-4 w-4" />
+              Parts Collection
             </button>
             <button
               type="button"
               onClick={onReturnMenu}
-              className="rounded-lg border border-white/15 bg-slate-900 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 cursor-pointer whitespace-nowrap"
+              className="min-h-[44px] w-full sm:w-auto rounded-lg border border-white/15 bg-slate-900 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 cursor-pointer whitespace-nowrap"
             >
               コース・マシン選択
             </button>
@@ -213,36 +216,36 @@ export function MenuOverlay({
   const activeSpec = MACHINES.find((m) => m.id === selectedMachine) ?? MACHINES[0];
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-4 sm:p-6 overflow-y-auto">
-      {/* Top Header: Clean Title Lockup + Card Collection + Course Best Record */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="pointer-events-auto">
-          <h1 className="font-display text-3xl sm:text-5xl font-bold tracking-tight text-white">
+    <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-6 overflow-hidden">
+      {/* Top Header: Compact Title Lockup + Parts Collection + Course Best Record */}
+      <div className="flex items-start justify-between gap-2.5">
+        <div className="pointer-events-auto min-w-0">
+          <h1 className="font-display text-2xl sm:text-5xl font-bold tracking-tight text-white leading-none">
             HYPERION <span className="text-cyan-400">GP</span>
           </h1>
-          <p className="mt-1 text-xs sm:text-sm text-slate-300">
+          <p className="mt-1 text-[11px] sm:text-sm text-slate-300 truncate">
             {activeCourse.jpName} · {activeCourse.categoryLabel}
           </p>
         </div>
 
-        <div className="pointer-events-auto flex flex-wrap items-center gap-2.5">
+        <div className="pointer-events-auto flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={onOpenCollection}
-            className="flex items-center gap-2.5 rounded-xl border border-amber-400/35 bg-[#070b14]/90 px-3.5 py-2 text-left transition-colors hover:border-amber-300 hover:bg-amber-500/10 cursor-pointer whitespace-nowrap shrink-0"
+            className="flex min-h-[44px] items-center gap-2 rounded-xl border border-amber-400/35 bg-[#070b14]/92 px-3 py-1.5 sm:px-3.5 sm:py-2 text-left transition-colors hover:border-amber-300 hover:bg-amber-500/10 cursor-pointer whitespace-nowrap shrink-0"
           >
-            <BookOpen className="h-4.5 w-4.5 text-amber-400 shrink-0" />
+            <Cpu className="h-4 w-4 sm:h-4.5 sm:w-4.5 text-amber-400 shrink-0" />
             <div>
-              <div className="text-[10px] font-semibold tracking-wide text-amber-300">
-                Card Collection
+              <div className="text-[10px] font-semibold tracking-wide text-amber-300 leading-tight">
+                Parts Collection
               </div>
-              <div className="font-mono-num text-sm font-bold text-white">
-                {collectedCount} / {totalTermCount} 枚
+              <div className="font-mono-num text-xs sm:text-sm font-bold text-white leading-tight">
+                {collectedCount} / {totalTermCount}
               </div>
             </div>
           </button>
 
-          <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-[#070b14]/88 px-3.5 py-2 text-xs">
+          <div className="hidden sm:flex items-center gap-3 rounded-xl border border-white/10 bg-[#070b14]/90 px-3.5 py-2 text-xs">
             <div>
               <div className="text-[10px] text-slate-400">コース最速ラップ</div>
               <div className="font-mono-num text-sm sm:text-base font-bold text-amber-400">
@@ -253,8 +256,183 @@ export function MenuOverlay({
         </div>
       </div>
 
-      {/* Bottom Hangar Dock: Course Selector + Machine Selector + Speed Class + Launch CTA */}
-      <div className="pointer-events-auto mx-auto mt-4 w-full max-w-5xl rounded-2xl border border-white/12 bg-[#070b14]/92 p-3.5 sm:p-4 shadow-2xl">
+      {/* Mobile-Optimized Tabbed Hangar Dock (< md) */}
+      <div className="pointer-events-auto md:hidden mx-auto w-full max-w-lg rounded-2xl border border-white/12 bg-[#070b14]/94 p-3 shadow-2xl">
+        {/* Mobile Tab Switcher (Course / Machine) */}
+        <div className="mb-2.5 grid grid-cols-2 gap-1.5 rounded-xl bg-slate-900/90 p-1">
+          <button
+            type="button"
+            onClick={() => setMobileTab('course')}
+            className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+              mobileTab === 'course'
+                ? 'bg-cyan-500 text-slate-950'
+                : 'text-slate-300 hover:text-white'
+            }`}
+          >
+            <MapPin className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">コース選択</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileTab('machine')}
+            className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+              mobileTab === 'machine'
+                ? 'bg-cyan-500 text-slate-950'
+                : 'text-slate-300 hover:text-white'
+            }`}
+          >
+            <Car className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">マシン選択</span>
+          </button>
+        </div>
+
+        {/* Mobile Tab Content */}
+        {mobileTab === 'course' ? (
+          <div className="grid grid-cols-2 gap-2">
+            {COURSES.map((course) => {
+              const isSelected = course.id === selectedCourse;
+              return (
+                <button
+                  key={course.id}
+                  type="button"
+                  onClick={() => onSelectCourse(course.id)}
+                  className={`flex min-h-[58px] flex-col justify-between rounded-xl border px-3 py-2 text-left transition-colors cursor-pointer ${
+                    isSelected
+                      ? 'bg-slate-900'
+                      : 'border-white/10 bg-slate-900/55 hover:border-white/25'
+                  }`}
+                  style={
+                    isSelected
+                      ? {
+                          borderColor: course.accentHex,
+                          boxShadow: `0 0 14px ${course.accentHex}2a`,
+                        }
+                      : undefined
+                  }
+                >
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-display text-xs font-bold text-white truncate">
+                      {course.jpName}
+                    </span>
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-sm"
+                      style={{ backgroundColor: course.accentHex }}
+                    />
+                  </div>
+                  <span
+                    className="mt-1 truncate text-[10px] font-semibold"
+                    style={{ color: isSelected ? course.accentHex : '#94a3b8' }}
+                  >
+                    {course.categoryLabel}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-2">
+            {MACHINES.map((m) => {
+              const selected = m.id === selectedMachine;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => onSelectMachine(m.id)}
+                  className={`flex min-h-[60px] items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-colors cursor-pointer ${
+                    selected
+                      ? 'border-cyan-400 bg-cyan-500/14'
+                      : 'border-white/10 bg-slate-900/65 hover:border-white/25'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="h-3 w-3 rounded-sm shrink-0"
+                        style={{ backgroundColor: m.accentHex }}
+                      />
+                      <span className="font-display text-sm font-bold text-white truncate">
+                        {m.name}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-slate-300">{m.subtitle}</div>
+                  </div>
+                  <div className="flex flex-col gap-1 w-28 shrink-0 text-[10px] text-slate-300">
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span>速度</span>
+                      <div className="h-1.5 w-16 overflow-hidden rounded-sm bg-slate-800">
+                        <div className="h-full bg-cyan-400" style={{ width: `${m.stats.speed}%` }} />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span>加速</span>
+                      <div className="h-1.5 w-16 overflow-hidden rounded-sm bg-slate-800">
+                        <div className="h-full bg-amber-400" style={{ width: `${m.stats.accel}%` }} />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span>道具</span>
+                      <div className="h-1.5 w-16 overflow-hidden rounded-sm bg-slate-800">
+                        <div className="h-full bg-purple-400" style={{ width: `${m.stats.itemPower}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Mobile Thumb-Zone Class Toggle + Launch CTA */}
+        <div className="mt-3 flex flex-col gap-2 border-t border-white/10 pt-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold text-slate-400">
+                {speedClass === 'hard' ? '未解答・低正答率を優先出題' : '標準クラス · 全問題対象'}
+              </div>
+              <div className="font-display text-xs font-bold text-white truncate">
+                {activeSpec.name} · {activeCourse.jpName}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1 rounded-lg bg-slate-900 p-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => onSelectClass('normal')}
+                className={`min-h-[38px] rounded-md px-3 py-1.5 text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                  speedClass === 'normal'
+                    ? 'bg-cyan-500 text-slate-950'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                NORMAL
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectClass('hard')}
+                className={`min-h-[38px] rounded-md px-3 py-1.5 text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                  speedClass === 'hard'
+                    ? 'bg-amber-500 text-slate-950'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                HARD
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onStartRace}
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-6 font-display text-base font-bold tracking-wider text-slate-950 transition-colors hover:bg-cyan-400 cursor-pointer"
+          >
+            <Play className="h-4.5 w-4.5 fill-current" />
+            レース開始
+          </button>
+        </div>
+      </div>
+
+      {/* Desktop Hangar Dock (>= md): Full Course + Machine + Difficulty + Launch View */}
+      <div className="pointer-events-auto hidden md:block mx-auto mt-4 w-full max-w-5xl rounded-2xl border border-white/12 bg-[#070b14]/92 p-4 shadow-2xl">
         {/* Course Selector Row */}
         <div className="mb-3 border-b border-white/10 pb-3">
           <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-slate-400">
@@ -262,12 +440,10 @@ export function MenuOverlay({
               <MapPin className="h-3.5 w-3.5 text-cyan-400" />
               コース＆出題カテゴリ選択
             </span>
-            <span className="hidden sm:inline truncate text-slate-400">
-              {activeCourse.subtitle}
-            </span>
+            <span className="truncate text-slate-400">{activeCourse.subtitle}</span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <div className="grid grid-cols-4 gap-2">
             {COURSES.map((course) => {
               const isSelected = course.id === selectedCourse;
               return (
@@ -311,9 +487,9 @@ export function MenuOverlay({
         </div>
 
         {/* Machines & Launch Row */}
-        <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-12 lg:items-center">
+        <div className="grid grid-cols-12 items-center gap-3.5">
           {/* 3 Machine Cards */}
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:col-span-7">
+          <div className="col-span-7 grid grid-cols-3 gap-2">
             {MACHINES.map((m) => {
               const selected = m.id === selectedMachine;
               return (
@@ -372,44 +548,49 @@ export function MenuOverlay({
             })}
           </div>
 
-          {/* Right Action Zone: Class Toggle + Controls Summary + Start Race Button */}
-          <div className="flex flex-col justify-between gap-2.5 lg:col-span-5 lg:border-l lg:border-white/10 lg:pl-4">
+          {/* Right Action Zone: Normal/Hard Toggle + Start Race Button */}
+          <div className="col-span-5 flex flex-col justify-between gap-2.5 border-l border-white/10 pl-4">
             <div className="flex items-center justify-between gap-3">
               <div className="text-xs">
-                <div className="text-slate-400">クラス選択</div>
+                <div className="text-slate-400">出題＆速度クラス</div>
                 <div className="font-display text-sm font-bold text-white">
-                  {activeSpec.name} · {speedClass === 'hyper' ? 'MAX ~535 KM/H' : `MAX ~${activeSpec.maxSpeedKmh} KM/H`}
+                  {activeSpec.name} ·{' '}
+                  {speedClass === 'hard'
+                    ? `MAX ~${Math.round(activeSpec.maxSpeedKmh * 1.1)} KM/H`
+                    : `MAX ~${activeSpec.maxSpeedKmh} KM/H`}
                 </div>
               </div>
 
               <div className="flex items-center gap-1 rounded-lg bg-slate-900 p-1">
                 <button
                   type="button"
-                  onClick={() => onSelectClass('vector')}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
-                    speedClass === 'vector'
-                      ? 'bg-cyan-500 text-slate-950 font-bold'
+                  onClick={() => onSelectClass('normal')}
+                  className={`rounded-md px-3 py-1.5 text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                    speedClass === 'normal'
+                      ? 'bg-cyan-500 text-slate-950'
                       : 'text-slate-300 hover:text-white'
                   }`}
                 >
-                  VECTOR
+                  NORMAL
                 </button>
                 <button
                   type="button"
-                  onClick={() => onSelectClass('hyper')}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
-                    speedClass === 'hyper'
-                      ? 'bg-amber-500 text-slate-950 font-bold'
+                  onClick={() => onSelectClass('hard')}
+                  className={`rounded-md px-3 py-1.5 text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                    speedClass === 'hard'
+                      ? 'bg-amber-500 text-slate-950'
                       : 'text-slate-300 hover:text-white'
                   }`}
                 >
-                  HYPER
+                  HARD
                 </button>
               </div>
             </div>
 
             <div className="text-[11px] text-slate-400 leading-relaxed">
-              正答レーン通過でターボ＋カード獲得！同じ用語を2・3回クリアすると解説＆フレーバーが順次解放されます。
+              {speedClass === 'hard'
+                ? 'HARD: 未解答の問題・正答率が低い問題を優先出題して弱点を重点攻略します。'
+                : 'NORMAL: 未収集・未解放の用語パーツをバランスよく出題します。'}
             </div>
 
             <button

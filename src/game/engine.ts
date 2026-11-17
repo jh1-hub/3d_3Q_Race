@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { RaceAudioEngine } from './audio';
 import { createHypercarMesh, HypercarModel } from './hypercar';
-import { LANE_LATERALS, TrackItemSystem } from './items';
+import { LANE_LATERALS, QUIZ_ROW_S, TrackItemSystem } from './items';
 import { createProceduralTextures, ProceduralTextures } from './textures';
 import { createTrack, TrackData, TrackSample } from './track';
 import {
@@ -13,6 +13,8 @@ import {
   CourseSpec,
   EarnedRaceCard,
   GamePhase,
+  HitAlertTelemetry,
+  IncomingThreatType,
   MACHINES,
   MachineId,
   MachineSpec,
@@ -28,6 +30,7 @@ import {
   GeneratedQuiz,
   generateQuizChallenge,
   recordCollectedCard,
+  recordTermAnswer,
 } from '../utils/cardCollection';
 
 interface RacerState {
@@ -55,12 +58,18 @@ interface RacerState {
   hoverPhase: number;
   accelSurgeTimer: number;
   superTurboTimer: number;
+  glowBoostTimer: number;
+  hoverGlideTimer: number;
+  hoverGlideDuration: number;
+  hoverLift: number;
   heldItem: SubItemType | null;
   heldItemHoldTime: number;
   shieldTimer: number;
   hitSpinTimer: number;
+  postHitGraceTimer: number;
   itemPower: number;
   aiItemCooldown: number;
+  aiLastGateKey: string;
   aiTargetOffset: number;
   aiBaseSpeedFactor: number;
 }
@@ -157,7 +166,7 @@ export class RaceEngine {
   private phase: GamePhase = 'menu';
   private courseId: CourseId = 'orbital';
   private machineId: MachineId = 'valkyrie';
-  private speedClass: SpeedClass = 'vector';
+  private speedClass: SpeedClass = 'normal';
 
   private racers: RacerState[] = [];
   private playerRacer!: RacerState;
@@ -174,6 +183,9 @@ export class RaceEngine {
   private totalElapsedSec = 0;
   private eventNotice: string | null = null;
   private eventNoticeTimer = 0;
+  private hitAlertSource: string | null = null;
+  private hitAlertHex = '#EF4444';
+  private hitAlertTimer = 0;
   private allTimeBestLapMs: number | null = null;
   private isNewRecord = false;
   private lastWallSoundTime = 0;
@@ -419,6 +431,8 @@ export class RaceEngine {
     this.raceElapsedMs = 0;
     this.eventNotice = null;
     this.eventNoticeTimer = 0;
+    this.hitAlertSource = null;
+    this.hitAlertTimer = 0;
     this.isNewRecord = false;
     this.camInitialized = false;
 
@@ -454,6 +468,8 @@ export class RaceEngine {
     this.buildRacers();
     this.resetGridPositions();
     this.camInitialized = false;
+    this.hitAlertSource = null;
+    this.hitAlertTimer = 0;
     this.activeQuiz = null;
     this.quizLanesRevealed = false;
     this.quizFeedback = null;
@@ -561,12 +577,18 @@ export class RaceEngine {
       hoverPhase: 0,
       accelSurgeTimer: 0,
       superTurboTimer: 0,
+      glowBoostTimer: 0,
+      hoverGlideTimer: 0,
+      hoverGlideDuration: 1,
+      hoverLift: 0,
       heldItem: null,
       heldItemHoldTime: 0,
       shieldTimer: 0,
       hitSpinTimer: 0,
+      postHitGraceTimer: 0,
       itemPower: playerSpec.itemPower,
       aiItemCooldown: 2,
+      aiLastGateKey: '',
       aiTargetOffset: 0,
       aiBaseSpeedFactor: 1,
     };
@@ -608,12 +630,18 @@ export class RaceEngine {
         hoverPhase: idx * 1.4,
         accelSurgeTimer: 0,
         superTurboTimer: 0,
+        glowBoostTimer: 0,
+        hoverGlideTimer: 0,
+        hoverGlideDuration: 1,
+        hoverLift: 0,
         heldItem: null,
         heldItemHoldTime: 0,
         shieldTimer: 0,
         hitSpinTimer: 0,
+        postHitGraceTimer: 0,
         itemPower: cfg.itemPower,
-        aiItemCooldown: 2.5 + idx * 0.8,
+        aiItemCooldown: 2.0 + idx * 0.8,
+        aiLastGateKey: '',
         aiTargetOffset: cfg.offset,
         aiBaseSpeedFactor: cfg.speedFactor,
       });
@@ -644,10 +672,16 @@ export class RaceEngine {
       r.sectorFlags = 0;
       r.accelSurgeTimer = 0;
       r.superTurboTimer = 0;
+      r.glowBoostTimer = 0;
+      r.hoverGlideTimer = 0;
+      r.hoverGlideDuration = 1;
+      r.hoverLift = 0;
       r.heldItem = null;
       r.heldItemHoldTime = 0;
       r.shieldTimer = 0;
       r.hitSpinTimer = 0;
+      r.postHitGraceTimer = 0;
+      r.aiLastGateKey = '';
       r.rollVisual = 0;
       r.pitchVisual = 0;
 
@@ -771,6 +805,13 @@ export class RaceEngine {
       }
     }
 
+    if (this.hitAlertTimer > 0) {
+      this.hitAlertTimer -= dt;
+      if (this.hitAlertTimer <= 0) {
+        this.hitAlertSource = null;
+      }
+    }
+
     if (this.quizFeedbackTimer > 0) {
       this.quizFeedbackTimer -= dt;
       if (this.quizFeedbackTimer <= 0) {
@@ -820,7 +861,7 @@ export class RaceEngine {
       this.updateQuizSchedule();
     }
 
-    const classMultiplier = this.speedClass === 'hyper' ? 1.16 : 1.0;
+    const classMultiplier = this.speedClass === 'hard' ? 1.10 : 1.0;
     const spec = this.getSelectedSpec();
 
     let playerAccelerating = false;
@@ -833,11 +874,20 @@ export class RaceEngine {
       if (r.superTurboTimer > 0) {
         r.superTurboTimer = Math.max(0, r.superTurboTimer - dt);
       }
+      if (r.glowBoostTimer > 0) {
+        r.glowBoostTimer = Math.max(0, r.glowBoostTimer - dt);
+      }
+      if (r.hoverGlideTimer > 0) {
+        r.hoverGlideTimer = Math.max(0, r.hoverGlideTimer - dt);
+      }
       if (r.shieldTimer > 0) {
         r.shieldTimer = Math.max(0, r.shieldTimer - dt);
       }
       if (r.hitSpinTimer > 0) {
         r.hitSpinTimer = Math.max(0, r.hitSpinTimer - dt);
+      }
+      if (r.postHitGraceTimer > 0) {
+        r.postHitGraceTimer = Math.max(0, r.postHitGraceTimer - dt);
       }
       if (this.phase === 'racing' && !r.finished && r.heldItem !== null) {
         r.heldItemHoldTime += dt;
@@ -859,7 +909,11 @@ export class RaceEngine {
       this.checkSpeedPads(r);
       this.checkTrackPickups(r);
       this.updateLapProgress(r);
-      this.syncRacerVisual(r, dt, r.isPlayer ? playerAccelerating : r.accelSurgeTimer > 0);
+      this.syncRacerVisual(
+        r,
+        dt,
+        r.isPlayer ? playerAccelerating : r.accelSurgeTimer > 0 || r.glowBoostTimer > 0
+      );
     }
 
     this.updateHazards(dt);
@@ -876,6 +930,7 @@ export class RaceEngine {
     this.keyLight.target.position.copy(this.playerRacer.pos);
 
     // Stream speed dust particles relative to camera
+    this.dustMat.size = playerAccelerating ? 1.18 : 0.75;
     this.updateSpeedDust();
 
     // Camera & Audio
@@ -908,14 +963,19 @@ export class RaceEngine {
     const steer = THREE.MathUtils.clamp(keySteer + this.touchInput.steerAnalog, -1, 1);
 
     const superTurbo = r.superTurboTimer > 0;
-    const accelerating = r.accelSurgeTimer > 0 || superTurbo;
+    const glowActive = r.glowBoostTimer > 0;
+    const hoverActive = r.hoverGlideTimer > 0;
+    const accelerating = r.accelSurgeTimer > 0 || superTurbo || glowActive;
 
     const baseMaxSpeed = (spec.maxSpeedKmh / 3.6) * classMultiplier;
-    const hitPenalty = r.hitSpinTimer > 0 ? 0.48 : 1.0;
+    const hitPenalty = r.hitSpinTimer > 0 ? 0.52 : 1.0;
     const shieldBonus = r.shieldTimer > 0 ? 1.04 + 0.04 * r.itemPower : 1.0;
-    const turboSpeedMult = superTurbo ? 1.44 : accelerating ? 1.28 : 1.0;
-    const turboAccelMult = superTurbo ? 2.2 : accelerating ? 1.7 : 1.0;
-    const activeMaxSpeed = baseMaxSpeed * hitPenalty * shieldBonus * turboSpeedMult;
+    const glowBonus = glowActive ? (r.itemPower >= 1.3 ? 1.24 : 1.16) : 1.0;
+    const hoverBonus = hoverActive ? (r.itemPower >= 1.3 ? 1.16 : 1.10) : 1.0;
+    const turboSpeedMult = superTurbo ? 1.44 : r.accelSurgeTimer > 0 ? 1.28 : 1.0;
+    const turboAccelMult = superTurbo ? 2.2 : r.accelSurgeTimer > 0 ? 1.7 : glowActive ? 1.45 : 1.0;
+    const activeMaxSpeed =
+      baseMaxSpeed * hitPenalty * shieldBonus * Math.max(turboSpeedMult, glowBonus) * hoverBonus;
     const accelRate = 48 * spec.accel * classMultiplier * turboAccelMult;
     const brakeRate = 68;
 
@@ -1004,27 +1064,77 @@ export class RaceEngine {
     playerSpec: MachineSpec,
     classMultiplier: number
   ): void {
-    // Gentle rubber-banding so races stay competitive without feeling rigged
     const playerProgress = this.getTotalProgress(this.playerRacer);
     const aiProgress = this.getTotalProgress(r);
     const gap = playerProgress - aiProgress;
-    const rubberBand = THREE.MathUtils.clamp(1 + gap * 0.45, 0.9, 1.12);
+    // Behave identically to normal laps until the player passes the final lap's first item gate
+    const isFinalStretch =
+      this.playerRacer.lap >= TOTAL_LAPS &&
+      this.playerRacer.s >= QUIZ_ROW_S[0] &&
+      this.playerRacer.s < 0.995;
+
+    let rubberBand: number;
+    const isHard = this.speedClass === 'hard';
+    if (!isFinalStretch && !this.playerRacer.finished) {
+      if (isHard) {
+        // Hard class: aggressive pack tension
+        if (gap > 0.06) {
+          rubberBand = 1.62;
+        } else if (gap > 0.015) {
+          rubberBand = THREE.MathUtils.clamp(1.08 + gap * 7.5, 1.08, 1.54);
+        } else if (gap < -0.025) {
+          rubberBand = THREE.MathUtils.clamp(0.95 + gap * 1.6, 0.80, 0.95);
+        } else {
+          rubberBand = 1.06;
+        }
+      } else {
+        // Normal class: steady competitive tension without unnaturally overtaking a 100%-correct player
+        if (gap > 0.08) {
+          rubberBand = 1.14;
+        } else if (gap > 0.02) {
+          rubberBand = THREE.MathUtils.clamp(0.99 + gap * 2.4, 0.99, 1.12);
+        } else if (gap < -0.02) {
+          rubberBand = THREE.MathUtils.clamp(0.91 + gap * 1.5, 0.78, 0.91);
+        } else {
+          rubberBand = 0.97;
+        }
+      }
+    } else {
+      // Final sprint after Gate 1: stay naturally fast without sudden deceleration
+      rubberBand = isHard
+        ? THREE.MathUtils.clamp(1 + gap * 0.30, 0.91, 1.03)
+        : THREE.MathUtils.clamp(0.94 + gap * 0.24, 0.86, 0.97);
+    }
+
+    const baseAiSpeed = (playerSpec.maxSpeedKmh / 3.6) * classMultiplier;
+    const playerFollowCap =
+      isHard && !isFinalStretch && gap > 0.012
+        ? Math.max(baseAiSpeed, this.playerRacer.speed * 1.18)
+        : baseAiSpeed;
+
+    const finalLapEase = isFinalStretch ? (isHard ? 0.97 : 0.94) : 1.0;
+    const glowMult = r.glowBoostTimer > 0 ? 1.16 : 1.0;
+    const hoverMult = r.hoverGlideTimer > 0 ? 1.10 : 1.0;
 
     const targetMax =
-      (playerSpec.maxSpeedKmh / 3.6) *
-      classMultiplier *
+      playerFollowCap *
       r.aiBaseSpeedFactor *
-      (r.hitSpinTimer > 0 ? 0.48 : 1.0) *
+      finalLapEase *
+      (r.hitSpinTimer > 0 ? 0.50 : 1.0) *
       (this.phase === 'finished' && r.isPlayer ? 0.72 : rubberBand) *
-      (r.accelSurgeTimer > 0 ? 1.22 : 1.0);
+      (r.accelSurgeTimer > 0 ? 1.2 : 1.0) *
+      glowMult *
+      hoverMult;
 
-    r.speed = THREE.MathUtils.damp(r.speed, targetMax, 1.8, dt);
+    const speedDamp = !isFinalStretch && gap > 0.025 ? 3.2 : 1.8;
+    r.speed = THREE.MathUtils.damp(r.speed, targetMax, speedDamp, dt);
 
-    if (r.heldItem && this.phase === 'racing') {
+    // AI can only use an item it picked up when crossing an item gate (max 1 stock, never before Gate 1)
+    if (this.phase === 'racing' && !r.finished && r.heldItem !== null) {
+      const playerNearQuizGate = this.isNearItemLine(this.playerRacer.s, 175, 28);
       r.aiItemCooldown -= dt;
-      if (r.aiItemCooldown <= 0) {
+      if (r.aiItemCooldown <= 0 && !playerNearQuizGate) {
         this.activateSubItem(r);
-        r.aiItemCooldown = 4.0 + Math.random() * 3.0;
       }
     }
 
@@ -1036,31 +1146,48 @@ export class RaceEngine {
       this.track.halfWidth - 2.4
     );
 
-    // Near item gates, AI racers yield clear lanes and never block the player or the correct item lane
-    if (this.isNearItemLine(r.s, 220, 50)) {
+    // Near item gates, AI racers deliberately steer away from the player and the correct answer lane
+    const aiNearGate = this.isNearItemLine(r.s, 280, 65);
+    const playerNearGate = this.isNearItemLine(this.playerRacer.s, 260, 55);
+    let avoidingPlayer = false;
+    if (aiNearGate || playerNearGate) {
       let dsPlayer = Math.abs(r.s - this.playerRacer.s);
       if (dsPlayer > 0.5) dsPlayer = 1 - dsPlayer;
-      if (dsPlayer * this.track.totalLength < 150) {
+      if (dsPlayer * this.track.totalLength < 220 || aiNearGate) {
+        avoidingPlayer = true;
         const playerLat = this.playerRacer.lateral;
         const correctLat = this.activeQuiz
           ? LANE_LATERALS[this.activeQuiz.correctLaneIndex]
           : playerLat;
-        const avoidCenter = Math.abs(desiredOffset - correctLat) < 4.8 ? correctLat : playerLat;
-        if (Math.abs(desiredOffset - avoidCenter) < 5.0) {
-          const pushDir = desiredOffset >= avoidCenter ? 1 : -1;
-          const candidate = avoidCenter + pushDir * 6.5;
-          const altCandidate = avoidCenter - pushDir * 6.5;
-          const maxAiLat = this.track.halfWidth - 2.2;
-          desiredOffset =
-            Math.abs(candidate) <= maxAiLat
-              ? candidate
-              : THREE.MathUtils.clamp(altCandidate, -maxAiLat, maxAiLat);
+        const maxAiLat = this.track.halfWidth - 1.9;
+        const candidateLats = [-maxAiLat, -10.5, -3.5, 3.5, 10.5, maxAiLat];
+        let bestLat = desiredOffset;
+        let bestScore = -Infinity;
+        for (const cand of candidateLats) {
+          const dPlayer = Math.abs(cand - playerLat);
+          const dCorrect = Math.abs(cand - correctLat);
+          const minClear = Math.min(dPlayer, dCorrect * 0.92);
+          const tieBreak = -Math.abs(cand - r.aiTargetOffset) * 0.04;
+          const score = minClear + tieBreak;
+          if (score > bestScore) {
+            bestScore = score;
+            bestLat = cand;
+          }
         }
+        desiredOffset = THREE.MathUtils.clamp(bestLat, -maxAiLat, maxAiLat);
       }
     }
 
     const latDiff = desiredOffset - r.lateral;
-    r.lateralVel = THREE.MathUtils.damp(r.lateralVel, THREE.MathUtils.clamp(latDiff * 2.5, -14, 14), 5, dt);
+    const maxLatVel = avoidingPlayer ? 22 : 14;
+    const latGain = avoidingPlayer ? 3.8 : 2.5;
+    const latDamp = avoidingPlayer ? 8.5 : 5;
+    r.lateralVel = THREE.MathUtils.damp(
+      r.lateralVel,
+      THREE.MathUtils.clamp(latDiff * latGain, -maxLatVel, maxLatVel),
+      latDamp,
+      dt
+    );
     r.lateral += r.lateralVel * dt;
 
     r.prevS = r.s;
@@ -1131,7 +1258,7 @@ export class RaceEngine {
     // ~20 seconds before the item line: show the question at top of screen
     if (!this.activeQuiz && etaSeconds <= 20.5) {
       const catId = this.getCourseSpec().categoryId;
-      this.activeQuiz = generateQuizChallenge(this.usedTermIds, catId);
+      this.activeQuiz = generateQuizChallenge(this.usedTermIds, catId, this.speedClass);
       this.usedTermIds.add(this.activeQuiz.targetTerm.term.id);
       this.quizLanesRevealed = false;
       this.itemSystem.setRowQuizDisplay(this.nextQuizRowIndex, this.activeQuiz.choices, false);
@@ -1148,7 +1275,13 @@ export class RaceEngine {
 
   private pushEventNotice(text: string): void {
     this.eventNotice = text;
-    this.eventNoticeTimer = 2.4;
+    this.eventNoticeTimer = 2.6;
+  }
+
+  private triggerHitAlert(source: string, accentHex: string, duration = 1.9): void {
+    this.hitAlertSource = source;
+    this.hitAlertHex = accentHex;
+    this.hitAlertTimer = duration;
   }
 
   private getRacerRank(racer: RacerState): number {
@@ -1171,8 +1304,28 @@ export class RaceEngine {
   }
 
   private checkTrackPickups(r: RacerState): void {
-    // Only the player triggers & acquires quiz gate items; CPU racers never pick up items
-    if (this.phase !== 'racing' || !r.isPlayer || r.finished) return;
+    if (this.phase !== 'racing' || r.finished) return;
+
+    // AI racers pick up at most 1 item strictly when passing through an item gate
+    if (!r.isPlayer) {
+      for (const row of this.itemSystem.rows) {
+        if (this.didCrossS(r.prevS, r.s, row.s)) {
+          const gateKey = `${r.lap}-${row.rowIndex}`;
+          if (r.aiLastGateKey !== gateKey) {
+            r.aiLastGateKey = gateKey;
+            const isFinalLapLate = r.lap >= TOTAL_LAPS && row.rowIndex >= 0;
+            const pool: SubItemType[] = isFinalLapLate
+              ? ['boost', 'glow_boost', 'hover_glide', 'shield', 'spread_missile']
+              : ['glow_boost', 'hover_glide', 'spread_missile', 'laser', 'leader_bomb', 'mine', 'emp'];
+            // Stock limit = 1 (overwrites any unused previous item)
+            r.heldItem = pool[Math.floor(Math.random() * pool.length)];
+            r.heldItemHoldTime = 0;
+            r.aiItemCooldown = 1.6 + Math.random() * 3.0;
+          }
+        }
+      }
+      return;
+    }
 
     const row = this.itemSystem.rows[this.nextQuizRowIndex];
     if (!row || !row.active) return;
@@ -1185,14 +1338,18 @@ export class RaceEngine {
     if (!crossed && distAlong >= 4.5) return;
 
     const laneIdx = this.getLaneIndexFromLateral(r.lateral);
-    this.itemSystem.setRowVisible(row.rowIndex, false);
+    this.itemSystem.setRowVisible(row.rowIndex, false, true);
     this.itemSystem.setRowQuizDisplay(row.rowIndex, null, false);
 
     const quiz =
-      this.activeQuiz ?? generateQuizChallenge(this.usedTermIds, this.getCourseSpec().categoryId);
+      this.activeQuiz ??
+      generateQuizChallenge(this.usedTermIds, this.getCourseSpec().categoryId, this.speedClass);
     const choice = quiz.choices[laneIdx];
     const correctChoice = quiz.choices[quiz.correctLaneIndex];
     this.quizAttempts += 1;
+
+    // Silently record attempts & correct count for Hard-mode weakness tracking
+    recordTermAnswer(quiz.targetTerm.term.id, choice.isCorrect);
 
     if (choice.isCorrect) {
       this.quizCorrectCount += 1;
@@ -1213,8 +1370,7 @@ export class RaceEngine {
       r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 2.4 * r.itemPower);
 
       if (choice.itemKind === 'boost') {
-        // Extra acceleration when the obtained item itself is Turbo
-        const classMultiplier = this.speedClass === 'hyper' ? 1.16 : 1.0;
+        const classMultiplier = this.speedClass === 'hard' ? 1.10 : 1.0;
         const baseMax = (this.getSelectedSpec().maxSpeedKmh / 3.6) * classMultiplier;
         r.superTurboTimer = Math.max(r.superTurboTimer, 3.2 * r.itemPower);
         r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 3.6 * r.itemPower);
@@ -1229,6 +1385,14 @@ export class RaceEngine {
 
       this.audio.playItemPickup();
       this.audio.playBoostPad();
+      this.track.sampleAtS(r.s, _sample);
+      this.itemSystem.spawnDashRings(
+        r.pos,
+        _sample.tangent,
+        _sample.up,
+        choice.itemKind === 'boost' ? 0xf59e0b : 0x22d3ee,
+        choice.itemKind === 'boost'
+      );
 
       if (choice.itemKind === 'boost') {
         this.quizFeedback = {
@@ -1236,21 +1400,24 @@ export class RaceEngine {
           termName: choice.term.name,
           message: `正解！「${choice.term.name}」獲得 · HYPER TURBO発動！`,
         };
-        this.pushEventNotice(`正解！「${choice.term.name}」カード獲得 + HYPER TURBO!`);
+        this.pushEventNotice(`正解！「${choice.term.name}」パーツ獲得 + HYPER TURBO!`);
       } else {
         this.quizFeedback = {
           correct: true,
           termName: choice.term.name,
           message: `正解！ターボ加速 + ${SUB_ITEMS[choice.itemKind].name}獲得`,
         };
-        this.pushEventNotice(`正解！「${choice.term.name}」カード獲得 + ${SUB_ITEMS[choice.itemKind].name}`);
+        this.pushEventNotice(`正解！「${choice.term.name}」パーツ獲得 + ${SUB_ITEMS[choice.itemKind].name}`);
       }
+      this.quizFeedbackTimer = 3.2;
     } else {
-      // Wrong answer: spin out and cannot obtain item
+      // Wrong answer: spin out and keep correct-answer review visible through the next question
       r.hitSpinTimer = 1.65;
       r.speed *= 0.48;
       r.accelSurgeTimer = 0;
       r.superTurboTimer = 0;
+      this.track.sampleAtS(r.s, _sample);
+      this.itemSystem.spawnHitBurst(r.pos, _sample.up, 0xef4444, 1.15);
       this.audio.playHitImpact();
 
       this.quizFeedback = {
@@ -1258,10 +1425,11 @@ export class RaceEngine {
         termName: correctChoice.term.name,
         message: `誤答スピン！ 正解は「${correctChoice.term.name}」`,
       };
+      this.triggerHitAlert('誤答スピン', '#EF4444', 1.8);
       this.pushEventNotice(`不正解スピン… 正解: ${correctChoice.term.name}`);
+      this.quizFeedbackTimer = 18.0;
     }
 
-    this.quizFeedbackTimer = 2.8;
     this.activeQuiz = null;
     this.quizLanesRevealed = false;
     this.assistedLaneIndex = null;
@@ -1275,30 +1443,56 @@ export class RaceEngine {
     r.heldItem = null;
     r.heldItemHoldTime = 0;
 
-    if (r.isPlayer && item !== 'boost') {
-      this.audio.playItemUse();
-    }
+    const enhanced = r.itemPower >= 1.3;
+    this.track.sampleAtS(r.s, _sample);
+    const maxLat = this.track.halfWidth - 2.0;
 
     if (item === 'boost') {
-      const dur = Number((2.4 * r.itemPower).toFixed(1));
+      const dur = Number((2.5 * r.itemPower).toFixed(1));
       r.accelSurgeTimer = Math.max(r.accelSurgeTimer, dur);
+      if (enhanced) {
+        r.superTurboTimer = Math.max(r.superTurboTimer, 1.8);
+      }
+      this.itemSystem.spawnDashRings(r.pos, _sample.tangent, _sample.up, 0xf59e0b, true);
       if (r.isPlayer) {
         this.audio.playBoostPad();
-        this.pushEventNotice(`ブースト加速発動 (${dur}s)`);
+        this.pushEventNotice(enhanced ? `Turbo Boost+ (${dur}s)` : `Turbo Boost (${dur}s)`);
       }
     } else if (item === 'shield') {
-      const dur = Number((5.0 * r.itemPower).toFixed(1));
+      const dur = Number((5.2 * r.itemPower).toFixed(1));
       r.shieldTimer = dur;
+      if (enhanced) {
+        r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 1.6);
+      }
+      this.itemSystem.spawnShockwave(r.pos, _sample.up, 0x22d3ee, enhanced ? 15 : 10, 0.5);
       if (r.isPlayer) {
-        this.pushEventNotice(`イージスシールド展開 (${dur}s)`);
+        this.audio.playEnergyRestore();
+        this.pushEventNotice(enhanced ? `Aegis Shield+ (${dur}s)` : `Aegis Shield (${dur}s)`);
       }
     } else if (item === 'mine') {
-      const dropS = (((r.s - 3.5 / this.track.totalLength) % 1) + 1) % 1;
-      this.itemSystem.spawnMine(r.id, dropS, r.lateral, r.itemPower);
-      if (r.isPlayer) {
-        this.pushEventNotice('ショックマイン設置');
+      const dropS = (((r.s - 3.8 / this.track.totalLength) % 1) + 1) % 1;
+      if (enhanced) {
+        [-4.6, 0, 4.6].forEach((offset) => {
+          const lat = THREE.MathUtils.clamp(r.lateral + offset, -maxLat, maxLat);
+          this.itemSystem.spawnMine(r.id, dropS, lat, r.itemPower);
+        });
+      } else {
+        this.itemSystem.spawnMine(r.id, dropS, r.lateral, r.itemPower);
       }
-    } else if (item === 'missile') {
+      this.itemSystem.spawnShockwave(r.pos, _sample.up, 0xa855f7, enhanced ? 14 : 9, 0.42);
+      if (r.isPlayer) {
+        this.audio.playItemUse();
+        this.pushEventNotice(enhanced ? 'Triple Mega Mine 設置！' : 'Mega Mine 設置！');
+      }
+    } else if (item === 'laser') {
+      const spawnS = (((r.s + 4.5 / this.track.totalLength) % 1) + 1) % 1;
+      this.itemSystem.spawnLaser(r.id, spawnS, r.lateral, r.speed, r.itemPower);
+      this.itemSystem.spawnShockwave(r.pos, _sample.up, 0xef4444, enhanced ? 16 : 11, 0.4);
+      if (r.isPlayer) {
+        this.audio.playLaserShot(enhanced);
+        this.pushEventNotice(enhanced ? 'Twin Plasma Laser 発射！' : 'Plasma Laser 発射！');
+      }
+    } else if (item === 'spread_missile') {
       const myProg = this.getTotalProgress(r);
       let target: RacerState | null = null;
       let bestAhead = Infinity;
@@ -1313,62 +1507,123 @@ export class RaceEngine {
       if (!target) {
         target = this.racers.find((o) => o.id !== r.id) ?? null;
       }
-      const spawnS = (((r.s + 3.0 / this.track.totalLength) % 1) + 1) % 1;
-      this.itemSystem.spawnMissile(
-        r.id,
-        target ? target.id : null,
-        spawnS,
-        r.lateral,
-        r.speed,
-        r.itemPower
-      );
+      const spawnS = (((r.s + 3.2 / this.track.totalLength) % 1) + 1) % 1;
+      const spreadOffsets = enhanced ? [-7.2, -3.6, 0, 3.6, 7.2] : [-4.4, 0, 4.4];
+      spreadOffsets.forEach((offset, idx) => {
+        const lat = THREE.MathUtils.clamp(r.lateral + offset, -maxLat, maxLat);
+        const sOffset = (((spawnS + (idx === Math.floor(spreadOffsets.length / 2) ? 0.002 : 0)) % 1) + 1) % 1;
+        const homingMult = offset === 0 ? 1.0 : 0.45;
+        this.itemSystem.spawnMissile(
+          r.id,
+          target ? target.id : null,
+          sOffset,
+          lat,
+          r.speed,
+          r.itemPower,
+          enhanced ? 1.12 : 0.95,
+          homingMult
+        );
+      });
+      this.itemSystem.spawnShockwave(r.pos, _sample.up, 0xfb7185, enhanced ? 16 : 11, 0.45);
       if (r.isPlayer) {
-        this.pushEventNotice(target ? `プラズマミサイル発射 → ${target.name}` : 'プラズマミサイル発射');
+        this.audio.playItemUse();
+        this.pushEventNotice(enhanced ? '5-Way Spread Missile 発射！' : 'Spread Missile 発射！');
+      }
+    } else if (item === 'leader_bomb') {
+      const sorted = [...this.racers].sort((a, b) => this.getTotalProgress(b) - this.getTotalProgress(a));
+      const target = sorted.find((o) => o.id !== r.id) ?? sorted[0];
+      if (target) {
+        this.itemSystem.spawnBombStrike(r.id, target.id, target.s, target.lateral, r.itemPower);
+      }
+      if (enhanced) {
+        r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 1.5);
+      }
+      this.itemSystem.spawnShockwave(r.pos, _sample.up, 0xf97316, 12, 0.45);
+      if (r.isPlayer) {
+        this.audio.playItemUse();
+        this.pushEventNotice(target ? `SatelliteLaser Lock-On → ${target.name}` : 'SatelliteLaser 発動！');
+      }
+    } else if (item === 'glow_boost') {
+      const dur = Number(((enhanced ? 6.6 : 5.0) * Math.max(1.0, r.itemPower * 0.9)).toFixed(1));
+      r.glowBoostTimer = Math.max(r.glowBoostTimer, dur);
+      r.accelSurgeTimer = Math.max(r.accelSurgeTimer, enhanced ? 2.4 : 1.5);
+      this.itemSystem.spawnShockwave(r.pos, _sample.up, 0xfde047, enhanced ? 18 : 13, 0.55);
+      if (r.isPlayer) {
+        this.audio.playBoostPad();
+        this.pushEventNotice(enhanced ? `Hyper Glow+ (${dur}s)` : `Hyper Glow (${dur}s)`);
+      }
+    } else if (item === 'hover_glide') {
+      const dur = Number(((enhanced ? 6.0 : 4.8) * Math.max(1.0, r.itemPower * 0.9)).toFixed(1));
+      r.hoverGlideTimer = Math.max(r.hoverGlideTimer, dur);
+      r.hoverGlideDuration = Math.max(r.hoverGlideDuration, dur);
+      this.itemSystem.spawnShockwave(r.pos, _sample.up, 0x2dd4bf, enhanced ? 17 : 12, 0.55);
+      if (r.isPlayer) {
+        this.audio.playHoverGlide();
+        this.pushEventNotice(enhanced ? `Aero Float+ (${dur}s)` : `Aero Float (${dur}s)`);
       }
     } else if (item === 'emp') {
       const myProg = this.getTotalProgress(r);
-      const stunSec = 1.45 * r.itemPower;
-      const slowMult = Math.max(0.45, 0.65 - (r.itemPower - 1) * 0.15);
+      const stunSec = 1.45 * Math.min(1.4, r.itemPower);
       let hitCount = 0;
       for (const other of this.racers) {
         if (other.id === r.id) continue;
-        if (this.getTotalProgress(other) > myProg) {
-          if (other.shieldTimer > 0) {
-            other.shieldTimer = 0;
-          } else {
-            other.hitSpinTimer = stunSec;
-            other.speed *= slowMult;
+        const progDiff = this.getTotalProgress(other) - myProg;
+        // Strike racers within visible ahead pack (~360m) with clear visual/audio hit feedback
+        if (progDiff > 0 && progDiff <= 0.075) {
+          const prevGrace = other.postHitGraceTimer;
+          this.applyHitToRacer(other, 'EMP Wave', stunSec);
+          if (other.postHitGraceTimer > prevGrace) {
             hitCount++;
           }
         }
       }
+      this.itemSystem.spawnShockwave(r.pos, _sample.up, 0x38bdf8, enhanced ? 26 : 18, 0.65);
       if (r.isPlayer) {
         this.audio.playHitImpact();
-        this.pushEventNotice(hitCount > 0 ? `EMPパルス命中 (${hitCount}機)` : 'EMPパルス発動');
+        this.pushEventNotice(hitCount > 0 ? `EMP Wave Hit (${hitCount})` : 'EMP Wave 発動！');
       }
     }
   }
 
-  private applyHitToRacer(r: RacerState, sourceLabel: string, stunDuration = 1.5): void {
+  private getAttackStyle(sourceLabel: string): { color: number; hex: string } {
+    if (sourceLabel === 'SatelliteLaser') return { color: 0xf97316, hex: '#F97316' };
+    if (sourceLabel === 'Plasma Laser') return { color: 0xef4444, hex: '#EF4444' };
+    if (sourceLabel === 'Spread Missile') return { color: 0xfb7185, hex: '#FB7185' };
+    if (sourceLabel === 'Mega Mine') return { color: 0xa855f7, hex: '#A855F7' };
+    if (sourceLabel === 'EMP Wave') return { color: 0x38bdf8, hex: '#38BDF8' };
+    if (sourceLabel === 'Hyper Glow') return { color: 0xfde047, hex: '#FDE047' };
+    return { color: 0xff4444, hex: '#EF4444' };
+  }
+
+  private applyHitToRacer(r: RacerState, sourceLabel: string, stunDuration = 1.4): void {
     if (r.shieldTimer > 0) {
       r.shieldTimer = 0;
+      this.track.sampleAtS(r.s, _sample);
+      this.itemSystem.spawnHitBurst(r.pos, _sample.up, 0x22d3ee, 1.0);
       if (r.isPlayer) {
         this.audio.playEnergyRestore();
-        this.pushEventNotice('シールドで攻撃を防御！');
+        this.pushEventNotice(`Aegis Shield 防御！ (${sourceLabel})`);
       }
       return;
     }
-    r.hitSpinTimer = stunDuration;
-    r.speed *= 0.55;
+    if (r.postHitGraceTimer > 0) return;
+
+    const { color, hex } = this.getAttackStyle(sourceLabel);
+    r.hitSpinTimer = r.isPlayer ? Math.min(1.25, stunDuration) : stunDuration;
+    r.postHitGraceTimer = r.isPlayer ? 2.6 : 1.5;
+    r.speed *= r.isPlayer ? 0.62 : 0.54;
     r.accelSurgeTimer = 0;
+    this.track.sampleAtS(r.s, _sample);
+    this.itemSystem.spawnHitBurst(r.pos, _sample.up, color, r.isPlayer ? 1.35 : 1.15);
     if (r.isPlayer) {
       this.audio.playHitImpact();
-      this.pushEventNotice(`${sourceLabel} 被弾！`);
+      this.triggerHitAlert(`${sourceLabel} 被弾！`, hex, 1.9);
+      this.pushEventNotice(`${sourceLabel} Hit!`);
     }
   }
 
   private updateHazards(dt: number): void {
-    // Update homing missiles
+    // 1. Homing & Spread Missiles
     for (let i = this.itemSystem.missiles.length - 1; i >= 0; i--) {
       const m = this.itemSystem.missiles[i];
       m.ttl -= dt;
@@ -1387,11 +1642,11 @@ export class RaceEngine {
         if (r.id === m.ownerId) continue;
         let ds = Math.abs(r.s - m.s);
         if (ds > 0.5) ds = 1 - ds;
-        if (ds * this.track.totalLength < 3.4 && Math.abs(r.lateral - m.lateral) < 2.6) {
-          this.applyHitToRacer(r, 'ミサイル', m.stunDuration);
+        if (ds * this.track.totalLength < 3.6 && Math.abs(r.lateral - m.lateral) < 2.8) {
+          this.applyHitToRacer(r, 'Spread Missile', m.stunDuration);
           if (m.ownerId === this.playerRacer.id) {
             this.audio.playHitImpact();
-            this.pushEventNotice(`HIT! ${r.name} にミサイル命中`);
+            this.pushEventNotice(`HIT! ${r.name} ← Spread Missile`);
           }
           hit = true;
           break;
@@ -1403,19 +1658,102 @@ export class RaceEngine {
       }
     }
 
-    // Check shock mines
+    // 2. Blazing Plasma Lasers
+    for (let i = this.itemSystem.lasers.length - 1; i >= 0; i--) {
+      const l = this.itemSystem.lasers[i];
+      l.ttl -= dt;
+      l.s = (((l.s + (l.speed * dt) / this.track.totalLength) % 1) + 1) % 1;
+      this.itemSystem.positionLaser(l);
+
+      let hit = false;
+      for (const r of this.racers) {
+        if (r.id === l.ownerId) continue;
+        let ds = Math.abs(r.s - l.s);
+        if (ds > 0.5) ds = 1 - ds;
+        if (ds * this.track.totalLength < 13.5 && Math.abs(r.lateral - l.lateral) < l.beamWidth) {
+          this.applyHitToRacer(r, 'Plasma Laser', l.stunDuration);
+          if (l.ownerId === this.playerRacer.id) {
+            this.audio.playHitImpact();
+            this.pushEventNotice(`HIT! ${r.name} ← Plasma Laser`);
+          }
+          hit = true;
+          break;
+        }
+      }
+
+      if (hit || l.ttl <= 0) {
+        this.itemSystem.removeLaser(i);
+      }
+    }
+
+    // 3. Orbital 1st-Place Strike (SatelliteLaser) — nearly guaranteed unless shielded or timed boost dodge
+    for (let i = this.itemSystem.bombStrikes.length - 1; i >= 0; i--) {
+      const b = this.itemSystem.bombStrikes[i];
+      const target = this.racers.find((r) => r.id === b.targetId);
+
+      if (!b.detonated) {
+        b.lockTimer -= dt;
+        const targetBoosting = Boolean(
+          target && (target.superTurboTimer > 0 || target.accelSurgeTimer > 0.25)
+        );
+        const lockCutoff = targetBoosting ? 0.16 : 0.04;
+        if (target && b.lockTimer > lockCutoff) {
+          b.s = target.s;
+          b.lateral = target.lateral;
+        }
+        this.track.sampleAtS(b.s, _sample);
+        const strikePos = _vA.copy(_sample.position).addScaledVector(_sample.right, b.lateral);
+        this.itemSystem.positionBombStrike(b, strikePos, _sample.up);
+
+        if (b.lockTimer <= 0) {
+          b.detonated = true;
+          b.damageApplied = true;
+          this.itemSystem.spawnHitBurst(strikePos, _sample.up, 0xf97316, 1.75);
+          if (b.ownerId === this.playerRacer.id || b.targetId === this.playerRacer.id) {
+            this.audio.playOrbitalExplosion();
+          }
+          let playerHitOrBlocked = false;
+          for (const r of this.racers) {
+            if (r.id === b.ownerId) continue;
+            if (r.pos.distanceTo(strikePos) <= b.blastRadius) {
+              if (r.isPlayer) playerHitOrBlocked = true;
+              this.applyHitToRacer(r, 'SatelliteLaser', b.stunDuration);
+              if (b.ownerId === this.playerRacer.id && !r.isPlayer) {
+                this.pushEventNotice(`SATELLITE LASER! ${r.name}`);
+              }
+            }
+          }
+          if (b.targetId === this.playerRacer.id && !playerHitOrBlocked) {
+            this.pushEventNotice('ブーストで SatelliteLaser 回避！');
+          }
+          this.itemSystem.positionBombStrike(b, strikePos, _sample.up);
+        }
+      } else {
+        b.blastTimer -= dt;
+        this.track.sampleAtS(b.s, _sample);
+        const strikePos = _vA.copy(_sample.position).addScaledVector(_sample.right, b.lateral);
+        this.itemSystem.positionBombStrike(b, strikePos, _sample.up);
+
+        if (b.blastTimer <= 0) {
+          this.itemSystem.removeBombStrike(i);
+        }
+      }
+    }
+
+    // 4. Mega Mines (Airborne Aero Float cars glide safely over mines!)
     for (let i = this.itemSystem.mines.length - 1; i >= 0; i--) {
       const mine = this.itemSystem.mines[i];
       if (mine.graceTimer > 0) continue;
 
       for (const r of this.racers) {
+        if (r.hoverGlideTimer > 0) continue;
         let ds = Math.abs(r.s - mine.s);
         if (ds > 0.5) ds = 1 - ds;
-        if (ds * this.track.totalLength < 2.4 && Math.abs(r.lateral - mine.lateral) < 2.3) {
-          this.applyHitToRacer(r, 'ショックマイン', mine.stunDuration);
+        if (ds * this.track.totalLength < mine.hitRadius && Math.abs(r.lateral - mine.lateral) < mine.hitRadius) {
+          this.applyHitToRacer(r, 'Mega Mine', mine.stunDuration);
           if (mine.ownerId === this.playerRacer.id && !r.isPlayer) {
             this.audio.playHitImpact();
-            this.pushEventNotice(`HIT! ${r.name} がマインに接触`);
+            this.pushEventNotice(`HIT! ${r.name} ← Mega Mine`);
           }
           this.itemSystem.removeMine(i);
           break;
@@ -1432,8 +1770,29 @@ export class RaceEngine {
       if (distAlong < pad.length * 0.55 && Math.abs(r.lateral - pad.lateral) < pad.width * 0.65) {
         if (r.accelSurgeTimer <= 0.1) {
           r.accelSurgeTimer = 1.25;
+          this.track.sampleAtS(r.s, _sample);
+          this.itemSystem.spawnDashRings(r.pos, _sample.tangent, _sample.up, 0x38bdf8, false);
           if (r.isPlayer) {
             this.audio.playBoostPad();
+          }
+        }
+      }
+    }
+
+    for (const fpad of this.track.floatPads) {
+      let ds = Math.abs(r.s - fpad.s);
+      if (ds > 0.5) ds = 1 - ds;
+      const distAlong = ds * this.track.totalLength;
+      if (distAlong < fpad.length * 0.55 && Math.abs(r.lateral - fpad.lateral) < fpad.width * 0.7) {
+        if (r.hoverGlideTimer <= 0.45) {
+          const padFloatDur = 3.0;
+          r.hoverGlideTimer = padFloatDur;
+          r.hoverGlideDuration = padFloatDur;
+          this.track.sampleAtS(r.s, _sample);
+          this.itemSystem.spawnShockwave(r.pos, _sample.up, 0x2dd4bf, 10, 0.45);
+          if (r.isPlayer) {
+            this.audio.playHoverGlide();
+            this.pushEventNotice('AERO FLOAT PAD!');
           }
         }
       }
@@ -1486,61 +1845,141 @@ export class RaceEngine {
   }
 
   private resolveCarCollisions(): void {
-    const minDist = 3.2;
-    const playerProtected = this.isNearItemLine(this.playerRacer.s, 190, 50);
+    const playerProtected = this.isNearItemLine(this.playerRacer.s, 260, 60);
 
     for (let i = 0; i < this.racers.length; i++) {
       for (let j = i + 1; j < this.racers.length; j++) {
         const a = this.racers[i];
         const b = this.racers[j];
+        const hasGlow = a.glowBoostTimer > 0 || b.glowBoostTimer > 0;
+        const baseDist = playerProtected && (a.isPlayer || b.isPlayer) ? 5.6 : 3.2;
+        const checkDist = hasGlow ? Math.max(baseDist, 4.4) : baseDist;
         const distSq = a.pos.distanceToSquared(b.pos);
-        if (distSq < minDist * minDist && distSq > 0.0001) {
-          const dist = Math.sqrt(distSq);
-          const push = (minDist - dist) * 0.5;
-          const latSign = a.lateral >= b.lateral ? 1 : -1;
 
-          // Near item lines, other cars never push or block the player
-          if (playerProtected && (a.isPlayer || b.isPlayer)) {
-            if (a.isPlayer) {
-              b.lateral -= latSign * push * 2;
-              b.lateralVel -= latSign * 6;
-            } else {
-              a.lateral += latSign * push * 2;
-              a.lateralVel += latSign * 6;
+        if (distSq < checkDist * checkDist && distSq > 0.0001) {
+          // Hyper Glow contact spin against rival machines
+          if (distSq < 4.4 * 4.4) {
+            if (a.glowBoostTimer > 0 && b.glowBoostTimer <= 0 && (a.isPlayer || !b.isPlayer)) {
+              const prevGrace = b.postHitGraceTimer;
+              this.applyHitToRacer(b, 'Hyper Glow', 1.35 * Math.min(1.3, a.itemPower));
+              if (a.isPlayer && b.postHitGraceTimer > prevGrace) {
+                this.audio.playHitImpact();
+                this.pushEventNotice(`HYPER GLOW! ${b.name} をスピン！`);
+              }
+            } else if (b.glowBoostTimer > 0 && a.glowBoostTimer <= 0 && (b.isPlayer || !a.isPlayer)) {
+              const prevGrace = a.postHitGraceTimer;
+              this.applyHitToRacer(a, 'Hyper Glow', 1.35 * Math.min(1.3, b.itemPower));
+              if (b.isPlayer && a.postHitGraceTimer > prevGrace) {
+                this.audio.playHitImpact();
+                this.pushEventNotice(`HYPER GLOW! ${a.name} をスピン！`);
+              }
             }
-            continue;
           }
 
-          a.lateral += latSign * push;
-          b.lateral -= latSign * push;
-          a.lateralVel += latSign * 4;
-          b.lateralVel -= latSign * 4;
+          if (distSq < baseDist * baseDist) {
+            const dist = Math.sqrt(distSq);
+            const push = (baseDist - dist) * 0.5;
+            const latSign = a.lateral >= b.lateral ? 1 : -1;
+
+            // Near item lines, other cars always yield wide clearance away from the player
+            if (playerProtected && (a.isPlayer || b.isPlayer)) {
+              if (a.isPlayer) {
+                b.lateral -= latSign * push * 2.2;
+                b.lateralVel -= latSign * 10;
+              } else {
+                a.lateral += latSign * push * 2.2;
+                a.lateralVel += latSign * 10;
+              }
+              continue;
+            }
+
+            a.lateral += latSign * push;
+            b.lateral -= latSign * push;
+            a.lateralVel += latSign * 4;
+            b.lateralVel -= latSign * 4;
+          }
         }
       }
     }
   }
 
-  private syncRacerVisual(r: RacerState, _dt: number, boosting: boolean): void {
+  private syncRacerVisual(r: RacerState, dt: number, boosting: boolean): void {
     r.model.root.position.copy(r.pos);
     r.model.root.quaternion.copy(r.headingQuat);
 
-    // Anti-grav gentle vertical hover oscillation + dynamic roll/pitch/hit-spin on chassis only
+    // Smooth gentle float & touchdown curve when hover_glide / Aero Float Pad is active
+    const hoverActive = r.hoverGlideTimer > 0;
+    const maxLift = r.itemPower >= 1.3 ? 4.4 : 3.5;
+    let targetLift = 0;
+    if (hoverActive) {
+      if (r.hoverGlideTimer < 0.85) {
+        const t = Math.max(0, r.hoverGlideTimer / 0.85);
+        targetLift = maxLift * (t * t * (3 - 2 * t));
+      } else {
+        targetLift = maxLift;
+      }
+    }
+    const safeDt = dt > 0 ? dt : 0.016;
+    r.hoverLift = THREE.MathUtils.damp(
+      r.hoverLift,
+      targetLift,
+      targetLift > r.hoverLift ? 6.2 : 5.4,
+      safeDt
+    );
+    const hoverLift =
+      r.hoverLift + (r.hoverLift > 0.1 ? Math.sin(r.hoverPhase * 1.4) * 0.14 * (r.hoverLift / maxLift) : 0);
+
     const hoverBob = Math.sin(r.hoverPhase) * 0.045;
-    r.model.chassisGroup.position.y = 0.80 + hoverBob;
+    r.model.chassisGroup.position.y = 0.80 + hoverBob + hoverLift;
     const spinY = r.hitSpinTimer > 0 ? r.hitSpinTimer * Math.PI * 4.5 : 0;
     r.model.chassisGroup.rotation.set(r.pitchVisual, spinY, r.rollVisual);
+
+    const shadowScale = 1 + hoverLift * 0.08;
+    r.model.shadowPlane.scale.setScalar(shadowScale);
 
     r.model.shieldDome.visible = r.shieldTimer > 0;
     if (r.shieldTimer > 0) {
       r.model.shieldDome.rotation.y += 0.04;
     }
 
-    const flameScale = boosting ? 1.9 + Math.sin(r.hoverPhase * 5) * 0.35 : 0.45 + Math.min(1, r.speed / 95) * 0.75;
-    const flameRadius = boosting ? 1.25 : 0.85;
+    const glowActive = r.glowBoostTimer > 0;
+    r.model.glowAura.visible = glowActive;
+    if (glowActive) {
+      r.model.glowAura.rotation.y += 0.09;
+      r.model.glowAura.rotation.z = Math.sin(r.hoverPhase * 2) * 0.14;
+      const glowPulse = 0.96 + Math.sin(r.hoverPhase * 4) * 0.09;
+      r.model.glowAura.scale.setScalar(glowPulse);
+    }
+
+    r.model.hoverHalo.visible = hoverActive || r.hoverLift > 0.2;
+    if (r.model.hoverHalo.visible) {
+      const haloPulse = 0.9 + Math.sin(r.hoverPhase * 5) * 0.16;
+      r.model.hoverHalo.scale.set(haloPulse, haloPulse, 1);
+    }
+
+    const spinning = r.hitSpinTimer > 0;
+    r.model.spinSparkRing.visible = spinning;
+    if (spinning) {
+      r.model.spinSparkRing.rotation.y -= 0.24;
+      const sp = 0.92 + Math.sin(r.hoverPhase * 8) * 0.18;
+      r.model.spinSparkRing.scale.setScalar(sp);
+    }
+
+    const dashActive = r.accelSurgeTimer > 0 || r.superTurboTimer > 0;
+    r.model.boostAura.visible = dashActive;
+    if (dashActive) {
+      const superMult = r.superTurboTimer > 0 ? 1.24 : 1.0;
+      const pulse = (0.94 + Math.sin(r.hoverPhase * 9) * 0.1) * superMult;
+      r.model.boostAura.scale.set(pulse, pulse, 1.0 + Math.sin(r.hoverPhase * 7) * 0.14);
+      r.model.boostAura.rotation.z = Math.sin(r.hoverPhase * 4) * 0.08;
+    }
+
+    const flameScale = boosting ? 2.4 + Math.sin(r.hoverPhase * 6) * 0.45 : 0.45 + Math.min(1, r.speed / 95) * 0.75;
+    const flameRadius = boosting ? 1.55 : 0.85;
     for (const flame of r.model.thrusterFlames) {
       flame.scale.set(flameRadius, flameRadius, flameScale);
     }
-    r.model.boostGlowMaterial.emissiveIntensity = boosting ? 3.5 : 2.0;
+    r.model.boostGlowMaterial.emissiveIntensity = glowActive ? 4.4 : boosting ? 3.9 : 2.0;
   }
 
   private updateMenuCamera(dt: number): void {
@@ -1659,9 +2098,32 @@ export class RaceEngine {
       };
     });
 
-    const missileWarning = this.itemSystem.missiles.some(
-      (m) => m.targetId === this.playerRacer.id
-    );
+    let incomingThreat: IncomingThreatType = null;
+    if (this.itemSystem.bombStrikes.some((b) => !b.detonated && b.targetId === this.playerRacer.id)) {
+      incomingThreat = 'satellite';
+    } else if (this.itemSystem.missiles.some((m) => m.targetId === this.playerRacer.id)) {
+      incomingThreat = 'missile';
+    } else {
+      const laserApproaching = this.itemSystem.lasers.some((l) => {
+        if (l.ownerId === this.playerRacer.id) return false;
+        let ds = this.playerRacer.s - l.s;
+        if (ds < 0) ds += 1;
+        return (
+          ds * this.track.totalLength < 250 &&
+          Math.abs(l.lateral - this.playerRacer.lateral) < l.beamWidth + 3.5
+        );
+      });
+      if (laserApproaching) incomingThreat = 'laser';
+    }
+
+    const hitAlert: HitAlertTelemetry | null =
+      this.hitAlertTimer > 0 && this.hitAlertSource
+        ? {
+            source: this.hitAlertSource,
+            accentHex: this.hitAlertHex,
+            remainingSec: this.hitAlertTimer,
+          }
+        : null;
 
     let activeQuizTelemetry: ActiveQuizTelemetry | null = null;
     if (this.phase === 'racing' && this.activeQuiz) {
@@ -1701,7 +2163,11 @@ export class RaceEngine {
       wrongWay: this.playerRacer.speed < -5,
       heldItem: this.playerRacer.heldItem,
       shieldActive: this.playerRacer.shieldTimer > 0,
-      missileWarning,
+      glowActive: this.playerRacer.glowBoostTimer > 0,
+      hoverActive: this.playerRacer.hoverGlideTimer > 0,
+      missileWarning: incomingThreat !== null,
+      incomingThreat,
+      hitAlert,
       eventNotice: this.eventNotice,
       activeQuiz: activeQuizTelemetry,
       quizFeedback: this.quizFeedback,

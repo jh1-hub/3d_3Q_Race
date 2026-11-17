@@ -237,6 +237,74 @@ export class RaceAudioEngine {
     });
   }
 
+  public playLaserShot(enhanced = false): void {
+    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    const filter = this.ctx.createBiquadFilter();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(enhanced ? 1950 : 1620, now);
+    osc.frequency.exponentialRampToValueAtTime(220, now + 0.24);
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(1400, now);
+    filter.Q.value = 3.2;
+    gain.gain.setValueAtTime(0.24, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.28);
+  }
+
+  public playOrbitalExplosion(): void {
+    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    const subOsc = this.ctx.createOscillator();
+    const subGain = this.ctx.createGain();
+    subOsc.type = 'sawtooth';
+    subOsc.frequency.setValueAtTime(160, now);
+    subOsc.frequency.exponentialRampToValueAtTime(26, now + 0.55);
+    subGain.gain.setValueAtTime(0.32, now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.58);
+    subOsc.connect(subGain);
+    subGain.connect(this.masterGain);
+    subOsc.start(now);
+    subOsc.stop(now + 0.6);
+
+    const hiOsc = this.ctx.createOscillator();
+    const hiGain = this.ctx.createGain();
+    hiOsc.type = 'triangle';
+    hiOsc.frequency.setValueAtTime(520, now);
+    hiOsc.frequency.exponentialRampToValueAtTime(75, now + 0.35);
+    hiGain.gain.setValueAtTime(0.2, now);
+    hiGain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+    hiOsc.connect(hiGain);
+    hiGain.connect(this.masterGain);
+    hiOsc.start(now);
+    hiOsc.stop(now + 0.4);
+  }
+
+  public playHoverGlide(): void {
+    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    [330, 495, 660].forEach((freq, idx) => {
+      if (!this.ctx || !this.masterGain) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.04);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.45, now + 0.45);
+      gain.gain.setValueAtTime(0.14, now + idx * 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.52);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now + idx * 0.04);
+      osc.stop(now + 0.54);
+    });
+  }
+
   public dispose(): void {
     try {
       this.engineOsc1?.stop();

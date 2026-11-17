@@ -2,7 +2,7 @@ export type MachineId = 'valkyrie' | 'tempest' | 'phantom';
 
 export type ChassisStyle = 'valkyrie' | 'tempest' | 'phantom';
 
-export type SpeedClass = 'vector' | 'hyper';
+export type SpeedClass = 'normal' | 'hard';
 
 export type CourseId = 'orbital' | 'oceanic' | 'lunar' | 'skycity';
 
@@ -107,7 +107,16 @@ export const COURSES: CourseSpec[] = [
   },
 ];
 
-export type SubItemType = 'boost' | 'missile' | 'shield' | 'mine' | 'emp';
+export type SubItemType =
+  | 'boost'
+  | 'laser'
+  | 'spread_missile'
+  | 'leader_bomb'
+  | 'mine'
+  | 'glow_boost'
+  | 'hover_glide'
+  | 'shield'
+  | 'emp';
 
 export interface SubItemMeta {
   type: SubItemType;
@@ -119,31 +128,55 @@ export interface SubItemMeta {
 export const SUB_ITEMS: Record<SubItemType, SubItemMeta> = {
   boost: {
     type: 'boost',
-    name: 'ターボブースト',
+    name: 'Turbo Boost',
     shortLabel: 'TURBO',
     accentHex: '#F59E0B',
   },
-  missile: {
-    type: 'missile',
-    name: 'プラズマミサイル',
-    shortLabel: 'MISSILE',
+  laser: {
+    type: 'laser',
+    name: 'Plasma Laser',
+    shortLabel: 'LASER',
     accentHex: '#EF4444',
   },
-  shield: {
-    type: 'shield',
-    name: 'イージスシールド',
-    shortLabel: 'SHIELD',
-    accentHex: '#06B6D4',
+  spread_missile: {
+    type: 'spread_missile',
+    name: 'Spread Missile',
+    shortLabel: 'SPREAD',
+    accentHex: '#FB7185',
+  },
+  leader_bomb: {
+    type: 'leader_bomb',
+    name: 'SatelliteLaser',
+    shortLabel: 'SAT-LASER',
+    accentHex: '#F97316',
   },
   mine: {
     type: 'mine',
-    name: 'ショックマイン',
+    name: 'Mega Mine',
     shortLabel: 'MINE',
     accentHex: '#A855F7',
   },
+  glow_boost: {
+    type: 'glow_boost',
+    name: 'Hyper Glow',
+    shortLabel: 'GLOW',
+    accentHex: '#FDE047',
+  },
+  hover_glide: {
+    type: 'hover_glide',
+    name: 'Aero Float',
+    shortLabel: 'FLOAT',
+    accentHex: '#2DD4BF',
+  },
+  shield: {
+    type: 'shield',
+    name: 'Aegis Shield',
+    shortLabel: 'SHIELD',
+    accentHex: '#06B6D4',
+  },
   emp: {
     type: 'emp',
-    name: 'EMPパルス',
+    name: 'EMP Wave',
     shortLabel: 'EMP',
     accentHex: '#38BDF8',
   },
@@ -263,6 +296,14 @@ export interface EarnedRaceCard {
   unlockedCount: number;
 }
 
+export type IncomingThreatType = 'missile' | 'laser' | 'satellite' | null;
+
+export interface HitAlertTelemetry {
+  source: string;
+  accentHex: string;
+  remainingSec: number;
+}
+
 export interface RaceTelemetry {
   phase: GamePhase;
   courseId: CourseId;
@@ -283,7 +324,11 @@ export interface RaceTelemetry {
   wrongWay: boolean;
   heldItem: SubItemType | null;
   shieldActive: boolean;
+  glowActive?: boolean;
+  hoverActive?: boolean;
   missileWarning: boolean;
+  incomingThreat: IncomingThreatType;
+  hitAlert: HitAlertTelemetry | null;
   eventNotice: string | null;
   activeQuiz: ActiveQuizTelemetry | null;
   quizFeedback: QuizFeedbackTelemetry | null;

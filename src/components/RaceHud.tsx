@@ -1,19 +1,24 @@
 import { useMemo } from 'react';
 import {
+  AlertTriangle,
   Bomb,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Crosshair,
   Flame,
   Pause,
   Play,
   Radio,
-  Rocket,
   RotateCcw,
   Shield,
+  Sparkles,
+  Sun,
   Volume2,
   VolumeX,
+  Wind,
   XCircle,
+  Zap,
 } from 'lucide-react';
 import { RaceTelemetry, SUB_ITEMS, SubItemType } from '../game/types';
 import { formatRaceTime } from '../utils/formatTime';
@@ -45,12 +50,20 @@ function SubItemIcon({ type, className = 'h-6 w-6' }: { type: SubItemType; class
   switch (type) {
     case 'boost':
       return <Flame className={`${className} text-amber-400`} />;
-    case 'missile':
-      return <Rocket className={`${className} text-red-400`} />;
-    case 'shield':
-      return <Shield className={`${className} text-cyan-400`} />;
+    case 'laser':
+      return <Zap className={`${className} text-red-400`} />;
+    case 'spread_missile':
+      return <Sparkles className={`${className} text-rose-400`} />;
+    case 'leader_bomb':
+      return <Crosshair className={`${className} text-orange-400`} />;
     case 'mine':
       return <Bomb className={`${className} text-purple-400`} />;
+    case 'glow_boost':
+      return <Sun className={`${className} text-yellow-300`} />;
+    case 'hover_glide':
+      return <Wind className={`${className} text-teal-300`} />;
+    case 'shield':
+      return <Shield className={`${className} text-cyan-400`} />;
     case 'emp':
       return <Radio className={`${className} text-sky-400`} />;
   }
@@ -84,9 +97,28 @@ export function RaceHud({
   const heldMeta = telemetry.heldItem ? SUB_ITEMS[telemetry.heldItem] : null;
   const activeQuiz = telemetry.activeQuiz;
   const quizFeedback = telemetry.quizFeedback;
+  const hitAlert = telemetry.hitAlert;
 
   return (
     <div className="pointer-events-none fixed inset-0 z-10 flex flex-col justify-between p-3 sm:p-5">
+      {/* Screen-edge impact border pulse when machine is hit or spinning */}
+      {hitAlert && isActiveRace && (
+        <div
+          className="pointer-events-none fixed inset-0 z-0 transition-opacity duration-150"
+          style={{
+            boxShadow: `inset 0 0 64px 10px ${hitAlert.accentHex}66`,
+          }}
+        />
+      )}
+      {/* Peripheral supersonic dash glow when boosting */}
+      {!hitAlert && telemetry.isAccelerating && isActiveRace && (
+        <div
+          className="pointer-events-none fixed inset-0 z-0 transition-opacity duration-150"
+          style={{
+            boxShadow: 'inset 0 0 54px 8px rgba(56, 189, 248, 0.28)',
+          }}
+        />
+      )}
       {/* Subtle Horizontal Drag Steering Indicator (only while dragging) */}
       {touchDrag.active && isActiveRace && Math.abs(touchDrag.steerAnalog) > 0.04 && (
         <div
@@ -181,7 +213,7 @@ export function RaceHud({
                 {heldMeta ? 'ITEM · タップで使用' : telemetry.shieldActive ? 'SHIELD ACTIVE' : 'ITEM SLOT'}
               </span>
               <span className="font-display text-xs sm:text-sm font-bold text-white whitespace-nowrap">
-                {heldMeta ? heldMeta.name : telemetry.shieldActive ? 'シールド展開中' : 'アイテムなし'}
+                {heldMeta ? heldMeta.name : telemetry.shieldActive ? 'Aegis Shield' : 'No Item'}
               </span>
             </div>
           </button>
@@ -285,30 +317,51 @@ export function RaceHud({
           </div>
         )}
 
-        {!activeQuiz && quizFeedback && (
-          <div
-            className={`flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs sm:text-sm font-bold shadow-xl ${
-              quizFeedback.correct
-                ? 'border-emerald-400/50 bg-[#051a14]/92 text-emerald-300'
-                : 'border-red-400/50 bg-[#1a060a]/92 text-red-300'
-            }`}
-          >
-            {quizFeedback.correct ? (
-              <CheckCircle2 className="h-4.5 w-4.5 shrink-0" />
-            ) : (
-              <XCircle className="h-4.5 w-4.5 shrink-0" />
-            )}
+        {!activeQuiz && quizFeedback && quizFeedback.correct && (
+          <div className="flex items-center gap-2 rounded-xl border border-emerald-400/50 bg-[#051a14]/92 px-4 py-2.5 text-xs sm:text-sm font-bold text-emerald-300 shadow-xl">
+            <CheckCircle2 className="h-4.5 w-4.5 shrink-0" />
             <span>{quizFeedback.message}</span>
           </div>
         )}
 
-        {telemetry.missileWarning && (
-          <div className="rounded-lg border border-red-500/50 bg-[#1a060a]/90 px-3.5 py-1 text-xs font-bold tracking-wider text-red-300">
-            ミサイル接近中 · INCOMING
+        {hitAlert && (
+          <div
+            className="flex items-center gap-2 rounded-xl border px-4 py-2 text-xs sm:text-sm font-bold text-white shadow-xl"
+            style={{
+              borderColor: hitAlert.accentHex,
+              backgroundColor: 'rgba(20, 8, 12, 0.94)',
+              boxShadow: `0 0 24px ${hitAlert.accentHex}44`,
+            }}
+          >
+            <AlertTriangle className="h-4.5 w-4.5 shrink-0" style={{ color: hitAlert.accentHex }} />
+            <span>{hitAlert.source}</span>
           </div>
         )}
 
-        {!quizFeedback && telemetry.eventNotice && (
+        {telemetry.incomingThreat && (
+          <div
+            className={`flex items-center gap-2 rounded-lg border px-3.5 py-1.5 text-xs font-bold tracking-wider shadow-lg ${
+              telemetry.incomingThreat === 'satellite'
+                ? 'border-orange-400/75 bg-[#241004]/94 text-orange-200'
+                : 'border-red-500/65 bg-[#1e060b]/92 text-red-200'
+            }`}
+          >
+            <AlertTriangle
+              className={`h-3.5 w-3.5 shrink-0 ${
+                telemetry.incomingThreat === 'satellite' ? 'text-orange-400' : 'text-red-400'
+              }`}
+            />
+            <span>
+              {telemetry.incomingThreat === 'satellite'
+                ? 'SATELLITE LASER 照準中 · DODGE!'
+                : telemetry.incomingThreat === 'laser'
+                  ? 'PLASMA LASER 後方接近 · WARNING'
+                  : 'SPREAD MISSILE 接近中 · INCOMING'}
+            </span>
+          </div>
+        )}
+
+        {!activeQuiz && telemetry.eventNotice && !hitAlert && (
           <div className="rounded-lg border border-cyan-400/35 bg-[#070b14]/90 px-3.5 py-1 text-xs font-semibold text-cyan-200">
             {telemetry.eventNotice}
           </div>
@@ -375,7 +428,21 @@ export function RaceHud({
       </div>
 
       {/* Collapsible Minimal Bottom Speed & Utility Dock */}
-      <div className="flex flex-col items-center">
+      <div className="flex flex-col items-center gap-2">
+        {/* Persistent Wrong-Answer Review Banner (visible even while next question is shown) */}
+        {quizFeedback && !quizFeedback.correct && (
+          <div className="flex max-w-[min(94vw,36rem)] items-center gap-2.5 rounded-xl border border-red-400/55 bg-[#1a060a]/94 px-4 py-2 text-xs sm:text-sm font-bold text-red-200 shadow-xl">
+            <XCircle className="h-4.5 w-4.5 shrink-0 text-red-400" />
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span className="text-red-300">誤答スピン</span>
+              <span aria-hidden="true" className="text-red-500">·</span>
+              <span className="text-white">
+                正解は「<span className="text-amber-300">{quizFeedback.termName}</span>」
+              </span>
+            </div>
+          </div>
+        )}
+
         <div onPointerDown={stopProp} className="pointer-events-auto flex flex-col items-center">
           <button
             type="button"
@@ -412,7 +479,11 @@ export function RaceHud({
 
               {/* Active Status Readout */}
               <div className="flex items-center gap-2 pr-4 border-r border-white/10 text-xs">
-                {telemetry.isAccelerating ? (
+                {telemetry.hoverActive ? (
+                  <span className="font-semibold text-teal-300">AERO FLOAT</span>
+                ) : telemetry.glowActive ? (
+                  <span className="font-semibold text-yellow-300">HYPER GLOW</span>
+                ) : telemetry.isAccelerating ? (
                   <span className="font-semibold text-amber-400">TURBO BOOST</span>
                 ) : telemetry.shieldActive ? (
                   <span className="font-semibold text-cyan-400">AEGIS SHIELD</span>

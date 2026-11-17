@@ -6,6 +6,7 @@ export interface ProceduralTextures {
   trackRoughness: THREE.CanvasTexture;
   startFinishAlbedo: THREE.CanvasTexture;
   boostPadTexture: THREE.CanvasTexture;
+  floatPadTexture: THREE.CanvasTexture;
   buildingEmissive: THREE.CanvasTexture;
   groundGridTexture: THREE.CanvasTexture;
   oceanSurfaceTexture: THREE.CanvasTexture;
@@ -161,6 +162,35 @@ export function createProceduralTextures(maxAnisotropy: number): ProceduralTextu
   bpCtx.strokeRect(8, 8, 240, 496);
   const boostPadTexture = register(new THREE.CanvasTexture(bpCanvas), true);
 
+  // 5b. Aero Float Pad Texture (teal anti-grav wing rings & updraft chevrons)
+  const fpCanvas = document.createElement('canvas');
+  fpCanvas.width = 256;
+  fpCanvas.height = 512;
+  const fpCtx = fpCanvas.getContext('2d')!;
+  fpCtx.fillStyle = '#031d1c';
+  fpCtx.fillRect(0, 0, 256, 512);
+  // Soft mint-teal levitation ellipses
+  for (let y = 84; y < 460; y += 112) {
+    fpCtx.strokeStyle = 'rgba(94, 234, 212, 0.42)';
+    fpCtx.lineWidth = 6;
+    fpCtx.beginPath();
+    fpCtx.ellipse(128, y + 26, 86, 26, 0, 0, Math.PI * 2);
+    fpCtx.stroke();
+
+    // Updraft wing V-glyph
+    fpCtx.strokeStyle = '#5eead4';
+    fpCtx.lineWidth = 12;
+    fpCtx.beginPath();
+    fpCtx.moveTo(44, y + 36);
+    fpCtx.lineTo(128, y - 6);
+    fpCtx.lineTo(212, y + 36);
+    fpCtx.stroke();
+  }
+  fpCtx.strokeStyle = '#2dd4bf';
+  fpCtx.lineWidth = 10;
+  fpCtx.strokeRect(8, 8, 240, 496);
+  const floatPadTexture = register(new THREE.CanvasTexture(fpCanvas), true);
+
   // 6. Building Emissive Window Grid
   const bCanvas = document.createElement('canvas');
   bCanvas.width = 256;
@@ -312,6 +342,7 @@ export function createProceduralTextures(maxAnisotropy: number): ProceduralTextu
     trackRoughness,
     startFinishAlbedo,
     boostPadTexture,
+    floatPadTexture,
     buildingEmissive,
     groundGridTexture,
     oceanSurfaceTexture,

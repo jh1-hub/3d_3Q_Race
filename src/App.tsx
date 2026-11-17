@@ -27,7 +27,11 @@ const INITIAL_TELEMETRY: RaceTelemetry = {
   wrongWay: false,
   heldItem: null,
   shieldActive: false,
+  glowActive: false,
+  hoverActive: false,
   missileWarning: false,
+  incomingThreat: null,
+  hitAlert: null,
   eventNotice: null,
   activeQuiz: null,
   quizFeedback: null,
@@ -60,7 +64,7 @@ export default function App() {
   const [minimapPoints, setMinimapPoints] = useState<{ x: number; y: number }[]>([]);
   const [selectedCourse, setSelectedCourse] = useState<CourseId>('orbital');
   const [selectedMachine, setSelectedMachine] = useState<MachineId>('valkyrie');
-  const [speedClass, setSpeedClass] = useState<SpeedClass>('vector');
+  const [speedClass, setSpeedClass] = useState<SpeedClass>('normal');
   const [muted, setMuted] = useState(false);
   const [dockCollapsed, setDockCollapsed] = useState(false);
   const [contextLost, setContextLost] = useState(false);

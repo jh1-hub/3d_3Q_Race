@@ -1,8 +1,9 @@
 import { quizCategories } from '../data/quizData';
-import { SubItemType } from '../game/types';
-import { CardCollectionMap, FlatTerm, Rarity, TermData } from '../types';
+import { SpeedClass, SubItemType } from '../game/types';
+import { CardCollectionMap, FlatTerm, Rarity, TermData, TermStats } from '../types';
 
 const COLLECTION_STORAGE_KEY = 'hyperion_gp_card_collection_v1';
+const TERM_STATS_STORAGE_KEY = 'hyperion_gp_term_stats_v1';
 
 let cachedFlatTerms: FlatTerm[] | null = null;
 
@@ -44,6 +45,37 @@ export function saveCardCollection(collection: CardCollectionMap): void {
   } catch {
     // Ignore storage errors
   }
+}
+
+export function loadTermStats(): TermStats {
+  try {
+    const raw = localStorage.getItem(TERM_STATS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed as TermStats;
+  } catch {
+    return {};
+  }
+}
+
+export function saveTermStats(stats: TermStats): void {
+  try {
+    localStorage.setItem(TERM_STATS_STORAGE_KEY, JSON.stringify(stats));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function recordTermAnswer(termId: number, isCorrect: boolean): TermStats {
+  const stats = loadTermStats();
+  const prev = stats[termId] ?? { correct: 0, attempts: 0 };
+  stats[termId] = {
+    attempts: prev.attempts + 1,
+    correct: prev.correct + (isCorrect ? 1 : 0),
+  };
+  saveTermStats(stats);
+  return stats;
 }
 
 export function recordCollectedCard(termId: number): {
@@ -108,10 +140,12 @@ export function formatQuizQuestion(description: string): string {
 
 export function generateQuizChallenge(
   usedTermIds: Set<number>,
-  categoryId?: string | null
+  categoryId?: string | null,
+  difficulty: SpeedClass = 'normal'
 ): GeneratedQuiz {
   const allFlat = getAllFlatTerms();
   const collection = loadCardCollection();
+  const termStats = loadTermStats();
 
   const categoryPool = categoryId
     ? allFlat.filter((ft) => ft.categoryId === categoryId)
@@ -123,24 +157,45 @@ export function generateQuizChallenge(
     pool = scopedTerms;
   }
 
-  // Prioritize uncollected cards (~60%) or partially unlocked cards < 3 clears (~30%)
-  const uncollectedPool = pool.filter((ft) => !collection[ft.term.id]);
-  const partialPool = pool.filter((ft) => {
-    const entry = collection[ft.term.id];
-    return entry && entry.count < 3;
-  });
+  let target: FlatTerm;
 
-  const roll = Math.random();
-  let pickPool = pool;
-  if (uncollectedPool.length > 0 && roll < 0.65) {
-    pickPool = uncollectedPool;
-  } else if (partialPool.length > 0 && roll < 0.9) {
-    pickPool = partialPool;
-  } else if (uncollectedPool.length > 0) {
-    pickPool = uncollectedPool;
+  if (difficulty === 'hard') {
+    // Hard mode: prioritize unanswered terms first; otherwise lowest accuracy terms (weakness drill)
+    const unanswered = pool.filter((ft) => (termStats[ft.term.id]?.attempts ?? 0) === 0);
+    if (unanswered.length > 0) {
+      target = unanswered[Math.floor(Math.random() * unanswered.length)];
+    } else {
+      const scored = shuffleArray(pool).sort((a, b) => {
+        const sa = termStats[a.term.id] ?? { correct: 0, attempts: 1 };
+        const sb = termStats[b.term.id] ?? { correct: 0, attempts: 1 };
+        const rateA = sa.attempts > 0 ? sa.correct / sa.attempts : 0;
+        const rateB = sb.attempts > 0 ? sb.correct / sb.attempts : 0;
+        if (Math.abs(rateA - rateB) > 0.001) return rateA - rateB;
+        return sa.attempts - sb.attempts;
+      });
+      const weakSlice = scored.slice(0, Math.min(5, scored.length));
+      target = weakSlice[Math.floor(Math.random() * weakSlice.length)];
+    }
+  } else {
+    // Normal mode: prioritize uncollected (~65%) or partially unlocked < 3 clears (~25%)
+    const uncollectedPool = pool.filter((ft) => !collection[ft.term.id]);
+    const partialPool = pool.filter((ft) => {
+      const entry = collection[ft.term.id];
+      return entry && entry.count < 3;
+    });
+
+    const roll = Math.random();
+    let pickPool = pool;
+    if (uncollectedPool.length > 0 && roll < 0.65) {
+      pickPool = uncollectedPool;
+    } else if (partialPool.length > 0 && roll < 0.9) {
+      pickPool = partialPool;
+    } else if (uncollectedPool.length > 0) {
+      pickPool = uncollectedPool;
+    }
+    target = pickPool[Math.floor(Math.random() * pickPool.length)];
   }
 
-  const target = pickPool[Math.floor(Math.random() * pickPool.length)];
   const descList = target.term.descriptions;
   const rawDesc = descList[Math.floor(Math.random() * descList.length)] ?? target.term.name;
 
@@ -173,13 +228,22 @@ export function generateQuizChallenge(
     if (dummies.length === 3) break;
   }
 
-  // Assign 4 items across the 4 lanes, ensuring 'boost' (turbo) appears frequently so players experience super turbo
-  const otherItems: SubItemType[] = shuffleArray(['missile', 'shield', 'mine', 'emp']);
+  // Assign 4 items across the 4 lanes from our 9 flashy items
+  const specialPool: SubItemType[] = shuffleArray([
+    'laser',
+    'spread_missile',
+    'leader_bomb',
+    'mine',
+    'glow_boost',
+    'hover_glide',
+    'shield',
+    'emp',
+  ]);
   const laneItemsPool: SubItemType[] = shuffleArray([
-    'boost',
-    Math.random() < 0.5 ? 'boost' : otherItems[3],
-    otherItems[0],
-    otherItems[1],
+    Math.random() < 0.55 ? 'boost' : specialPool[3],
+    specialPool[0],
+    specialPool[1],
+    specialPool[2],
   ]);
 
   const termsShuffled = shuffleArray([

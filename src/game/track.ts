@@ -20,6 +20,14 @@ export interface BoostPad {
   mesh: THREE.Mesh;
 }
 
+export interface FloatPad {
+  s: number;
+  lateral: number;
+  width: number;
+  length: number;
+  mesh: THREE.Mesh;
+}
+
 export interface TrackData {
   courseId: CourseId;
   group: THREE.Group;
@@ -27,6 +35,7 @@ export interface TrackData {
   totalLength: number;
   halfWidth: number;
   boostPads: BoostPad[];
+  floatPads: FloatPad[];
   minimapPoints: { x: number; y: number }[];
   worldToMinimap: (x: number, z: number) => { x: number; y: number };
   sampleAtS: (s: number, out: TrackSample) => void;
@@ -483,6 +492,98 @@ export function createTrack(
       lateral: spec.lateral * (halfWidth - 2.6),
       width: 3.8,
       length: 10.5,
+      mesh: padMesh,
+    });
+  }
+
+  // Aero Float Pads (5 per course, placed clear of boost pads and quiz gates at 0.48 & 0.95)
+  const floatPadSpecsByCourse: Record<CourseId, { s: number; lateral: number }[]> = {
+    orbital: [
+      { s: 0.14, lateral: 0.25 },
+      { s: 0.27, lateral: -0.30 },
+      { s: 0.62, lateral: -0.22 },
+      { s: 0.74, lateral: 0.34 },
+      { s: 0.84, lateral: -0.28 },
+    ],
+    oceanic: [
+      { s: 0.14, lateral: -0.26 },
+      { s: 0.27, lateral: 0.30 },
+      { s: 0.62, lateral: 0.24 },
+      { s: 0.74, lateral: -0.32 },
+      { s: 0.84, lateral: 0.26 },
+    ],
+    lunar: [
+      { s: 0.14, lateral: 0.0 },
+      { s: 0.27, lateral: 0.32 },
+      { s: 0.62, lateral: -0.32 },
+      { s: 0.74, lateral: 0.0 },
+      { s: 0.84, lateral: 0.30 },
+    ],
+    skycity: [
+      { s: 0.14, lateral: 0.32 },
+      { s: 0.27, lateral: -0.24 },
+      { s: 0.62, lateral: 0.28 },
+      { s: 0.74, lateral: -0.26 },
+      { s: 0.84, lateral: 0.0 },
+    ],
+  };
+
+  const floatPadSpecs = floatPadSpecsByCourse[courseId] ?? floatPadSpecsByCourse.orbital;
+  const floatPads: FloatPad[] = [];
+  const fpGeo = trackGeo(new THREE.PlaneGeometry(4.4, 11.2));
+  fpGeo.rotateX(-Math.PI / 2);
+  fpGeo.rotateY(Math.PI);
+  const fpMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      map: textures.floatPadTexture,
+      emissiveMap: textures.floatPadTexture,
+      emissive: new THREE.Color(0x2dd4bf),
+      emissiveIntensity: 1.9,
+      roughness: 0.2,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    })
+  );
+  const fpGateMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: 0x5eead4,
+      transparent: true,
+      opacity: 0.72,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+  );
+  const fpHaloGeo = trackGeo(new THREE.TorusGeometry(2.3, 0.09, 8, 24, Math.PI));
+
+  for (const spec of floatPadSpecs) {
+    const idx = Math.floor(spec.s * SAMPLE_COUNT) % SAMPLE_COUNT;
+    const s = samples[idx];
+    const padLeft = s.right.clone().negate();
+    const m4 = new THREE.Matrix4().makeBasis(padLeft, s.up, s.tangent);
+
+    const padMesh = new THREE.Mesh(fpGeo, fpMat);
+    padMesh.quaternion.setFromRotationMatrix(m4);
+    padMesh.position
+      .copy(s.position)
+      .addScaledVector(s.right, spec.lateral * (halfWidth - 2.8))
+      .addScaledVector(s.up, 0.04);
+    group.add(padMesh);
+
+    // Subtle floating holographic updraft arch above the pad to distinguish from Boost Pads
+    const gateHalo = new THREE.Mesh(fpHaloGeo, fpGateMat);
+    gateHalo.quaternion.setFromRotationMatrix(m4);
+    gateHalo.position
+      .copy(s.position)
+      .addScaledVector(s.right, spec.lateral * (halfWidth - 2.8))
+      .addScaledVector(s.up, 0.25);
+    group.add(gateHalo);
+
+    floatPads.push({
+      s: spec.s,
+      lateral: spec.lateral * (halfWidth - 2.8),
+      width: 4.4,
+      length: 11.2,
       mesh: padMesh,
     });
   }
@@ -1101,6 +1202,7 @@ export function createTrack(
     totalLength,
     halfWidth,
     boostPads,
+    floatPads,
     minimapPoints,
     worldToMinimap,
     sampleAtS,

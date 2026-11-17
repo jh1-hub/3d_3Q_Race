@@ -8,6 +8,10 @@ export interface HypercarModel {
   boostGlowMaterial: THREE.MeshStandardMaterial;
   shadowPlane: THREE.Mesh;
   shieldDome: THREE.Mesh;
+  glowAura: THREE.Group;
+  hoverHalo: THREE.Mesh;
+  spinSparkRing: THREE.Group;
+  boostAura: THREE.Group;
   dispose: () => void;
 }
 
@@ -560,8 +564,153 @@ export function createHypercarMesh(
   );
   const shieldDome = new THREE.Mesh(shieldGeo, shieldMat);
   shieldDome.position.set(0, 0.18, 0);
+  const shieldRimGeo = trackGeo(new THREE.TorusGeometry(2.25, 0.06, 8, 32));
+  shieldRimGeo.rotateX(Math.PI / 2);
+  shieldRimGeo.scale(0.95, 1.35, 1.0);
+  const shieldRim = new THREE.Mesh(
+    shieldRimGeo,
+    trackMat(
+      new THREE.MeshBasicMaterial({
+        color: 0x67e8f9,
+        transparent: true,
+        opacity: 0.85,
+      })
+    )
+  );
+  shieldDome.add(shieldRim);
   shieldDome.visible = false;
   chassisGroup.add(shieldDome);
+
+  // Luminous Hyper-Glow Aura Rings (hidden unless glow_boost is active)
+  const glowAura = new THREE.Group();
+  const auraRingMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: 0xfde047,
+      transparent: true,
+      opacity: 0.72,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+  );
+  const auraOuterMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: 0xfbbf24,
+      transparent: true,
+      opacity: 0.32,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+  );
+  const auraRingA = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(2.35, 0.07, 8, 32)), auraRingMat);
+  auraRingA.rotation.x = Math.PI / 2;
+  auraRingA.scale.set(0.86, 1.25, 1.0);
+  const auraRingB = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(1.95, 0.055, 8, 28)), auraRingMat);
+  auraRingB.rotation.z = Math.PI / 6;
+  const auraShellGeo = trackGeo(new THREE.SphereGeometry(2.4, 16, 12));
+  auraShellGeo.scale(0.74, 0.42, 1.15);
+  const auraShell = new THREE.Mesh(auraShellGeo, auraOuterMat);
+  glowAura.add(auraRingA, auraRingB, auraShell);
+  glowAura.position.set(0, 0.14, 0);
+  glowAura.visible = false;
+  chassisGroup.add(glowAura);
+
+  // Anti-Grav Aero Float Underbody Vortex Ring (hidden unless hover_glide is active)
+  const hoverHaloGeo = trackGeo(new THREE.TorusGeometry(1.85, 0.11, 10, 32));
+  hoverHaloGeo.rotateX(Math.PI / 2);
+  hoverHaloGeo.scale(0.88, 1.32, 1.0);
+  const hoverHaloMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: 0x2dd4bf,
+      transparent: true,
+      opacity: 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+  );
+  const hoverHalo = new THREE.Mesh(hoverHaloGeo, hoverHaloMat);
+  hoverHalo.position.set(0, -0.34, 0);
+  hoverHalo.visible = false;
+  chassisGroup.add(hoverHalo);
+
+  // Damage / Spin Hazard Arcs (visible whenever hitSpinTimer > 0)
+  const spinSparkRing = new THREE.Group();
+  const spinRingMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: 0xff3b30,
+      transparent: true,
+      opacity: 0.92,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+  );
+  const spinWarnMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: 0xfbbf24,
+      transparent: true,
+      opacity: 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+  );
+  const spinRingA = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(2.55, 0.11, 8, 28)), spinRingMat);
+  spinRingA.rotation.x = Math.PI / 2;
+  const spinRingB = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(2.15, 0.08, 8, 24)), spinWarnMat);
+  spinRingB.rotation.x = Math.PI / 2.4;
+  spinRingB.rotation.y = Math.PI / 4;
+  const spinRingC = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(2.15, 0.08, 8, 24)), spinRingMat);
+  spinRingC.rotation.x = -Math.PI / 2.4;
+  spinRingC.rotation.y = -Math.PI / 4;
+  spinSparkRing.add(spinRingA, spinRingB, spinRingC);
+  spinSparkRing.position.set(0, 0.35, 0);
+  spinSparkRing.visible = false;
+  chassisGroup.add(spinSparkRing);
+
+  // Supersonic Dash / Turbo Aura (Mach shock rings + wingtip plasma streaks, hidden unless boosting)
+  const boostAura = new THREE.Group();
+  const machRingMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.78,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+  );
+  const machHotMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: 0xfbbf24,
+      transparent: true,
+      opacity: 0.72,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+  );
+  const wingStreakGeo = trackGeo(new THREE.ConeGeometry(0.14, 3.8, 8));
+  wingStreakGeo.rotateX(-Math.PI / 2);
+  wingStreakGeo.translate(0, 0, -1.9);
+
+  const machRingFront = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(1.55, 0.055, 8, 28)), machRingMat);
+  machRingFront.position.set(0, 0.12, 1.35);
+  const machRingMid = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(2.05, 0.07, 8, 32)), machHotMat);
+  machRingMid.position.set(0, 0.14, -0.15);
+  const machRingRear = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(2.45, 0.085, 8, 32)), machRingMat);
+  machRingRear.position.set(0, 0.14, -1.75);
+
+  const streakLeft = new THREE.Mesh(wingStreakGeo, machHotMat);
+  streakLeft.position.set(-1.62, 0.04, -1.35);
+  const streakRight = new THREE.Mesh(wingStreakGeo, machHotMat);
+  streakRight.position.set(1.62, 0.04, -1.35);
+
+  const coreJetGeo = trackGeo(new THREE.ConeGeometry(0.46, 3.6, 12));
+  coreJetGeo.rotateX(-Math.PI / 2);
+  coreJetGeo.translate(0, 0, -1.8);
+  const coreJet = new THREE.Mesh(coreJetGeo, machRingMat);
+  coreJet.position.set(0, 0.08, -2.55);
+
+  boostAura.add(machRingFront, machRingMid, machRingRear, streakLeft, streakRight, coreJet);
+  boostAura.visible = false;
+  chassisGroup.add(boostAura);
 
   return {
     root,
@@ -570,6 +719,10 @@ export function createHypercarMesh(
     boostGlowMaterial: accentGlowMat,
     shadowPlane,
     shieldDome,
+    glowAura,
+    hoverHalo,
+    spinSparkRing,
+    boostAura,
     dispose: () => {
       geometries.forEach((g) => g.dispose());
       materials.forEach((m) => m.dispose());
