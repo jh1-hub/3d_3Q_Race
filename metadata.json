@@ -1,0 +1,8 @@
+{
+  "name": "3Dレース学習Remix HYPERION GP - Futuristic 3D Racing",
+  "description": "近未来の軌道サーキットを舞台にした、反重力ハイパーカーによる高速3Dレーシング学習ゲーム。",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
