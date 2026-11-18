@@ -3,28 +3,33 @@ import { CardCollectionModal } from './components/CardCollectionModal';
 import { MenuOverlay } from './components/MenuOverlay';
 import { RaceHud, TouchDragIndicator } from './components/RaceHud';
 import { SettingsModal } from './components/SettingsModal';
-import { BgmManager, BgmSnapshot } from './game/bgm';
+import { BgmManager } from './game/bgm';
 import { RaceEngine } from './game/engine';
-import { CourseId, MachineId, RaceTelemetry, SpeedClass } from './game/types';
+import { GameMode, MachineId, RaceTelemetry, resolveSubCourse, SpeedClass } from './game/types';
 import { CardCollectionMap, TermStats } from './types';
 import { loadCardCollection, loadTermStats } from './utils/cardCollection';
 import { useOnlineStatus } from './utils/pwa';
 import {
   GameSettings,
   loadGameSettings,
-  RaceBgmSelection,
   saveGameSettings,
 } from './utils/settings';
 
 const INITIAL_TELEMETRY: RaceTelemetry = {
   phase: 'menu',
+  gameMode: 'race',
   courseId: 'orbital',
+  courseKey: 'orbital',
+  subcategoryId: null,
   speedClass: 'normal',
-  machineId: 'valkyrie',
-  machineName: 'VALKYRIE-X',
+  machineId: 'phantom',
+  machineName: 'PHANTOM-V',
   countdownValue: 3,
   speedKmh: 0,
   isAccelerating: false,
+  manualGauge: 0,
+  hasBestGhost: false,
+  hasLastGhost: false,
   rank: 4,
   totalRacers: 4,
   lap: 1,
@@ -83,25 +88,13 @@ export default function App() {
   const settingsRef = useRef<GameSettings>(settings);
   settingsRef.current = settings;
 
-  const [bgmSnapshot, setBgmSnapshot] = useState<BgmSnapshot>({
-    statuses: {
-      'hyper-cyber-drive': 'idle',
-      'neo-tokyo-sprint': 'idle',
-      'neon-overdrive': 'idle',
-      'velocity-peak': 'idle',
-      'kiokuyouryou-no-uta': 'idle',
-    },
-    upcomingRandomTrackId: 'hyper-cyber-drive',
-    activeRaceTrackId: null,
-    midiReady: false,
-    midiError: null,
-  });
   const [bgmPreparing, setBgmPreparing] = useState(false);
 
   const [telemetry, setTelemetry] = useState<RaceTelemetry>(INITIAL_TELEMETRY);
   const [minimapPoints, setMinimapPoints] = useState<{ x: number; y: number }[]>([]);
-  const [selectedCourse, setSelectedCourse] = useState<CourseId>('orbital');
-  const [selectedMachine, setSelectedMachine] = useState<MachineId>('valkyrie');
+  const [gameMode, setGameMode] = useState<GameMode>('race');
+  const [selectedCourseKey, setSelectedCourseKey] = useState<string>('orbital');
+  const [selectedMachine, setSelectedMachine] = useState<MachineId>('phantom');
   const [speedClass, setSpeedClass] = useState<SpeedClass>('normal');
   const muted = settings.masterMuted;
   const [dockCollapsed, setDockCollapsed] = useState(false);
@@ -125,7 +118,6 @@ export default function App() {
     const initialSettings = settingsRef.current;
     const bgm = new BgmManager();
     bgmRef.current = bgm;
-    const unsubBgm = bgm.subscribe((snap) => setBgmSnapshot(snap));
     bgm.setMasterMuted(initialSettings.masterMuted);
     bgm.setBgmEnabled(initialSettings.bgmEnabled, initialSettings.raceBgm);
     bgm.enterMenu(initialSettings.raceBgm);
@@ -141,11 +133,11 @@ export default function App() {
     );
     engine.setMuted(initialSettings.masterMuted);
     engine.setSfxEnabled(initialSettings.sfxEnabled);
+    engine.setGhostVisibility(initialSettings.showBestGhost, initialSettings.showLastGhost);
     engineRef.current = engine;
     setMinimapPoints(engine.getMinimapPoints());
 
     return () => {
-      unsubBgm();
       bgm.dispose();
       bgmRef.current = null;
       engine.dispose();
@@ -163,15 +155,21 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  // Reset drag input if race is paused or ended
+  // Reset drag input if race is paused or ended, or if window loses focus
   useEffect(() => {
-    if (telemetry.phase !== 'racing' && telemetry.phase !== 'countdown') {
+    const resetPointer = () => {
       activePointerRef.current = null;
       setTouchDrag(INITIAL_TOUCH_DRAG);
       engineRef.current?.setTouchInput({
         steerAnalog: 0,
+        pointerHeld: false,
       });
+    };
+    if (telemetry.phase !== 'racing' && telemetry.phase !== 'countdown') {
+      resetPointer();
     }
+    window.addEventListener('blur', resetPointer);
+    return () => window.removeEventListener('blur', resetPointer);
   }, [telemetry.phase]);
 
   const handleSurfacePointerDown = useCallback(
@@ -200,7 +198,7 @@ export default function App() {
         currentX: e.clientX,
         steerAnalog: 0,
       });
-      engineRef.current?.setTouchInput({ steerAnalog: 0 });
+      engineRef.current?.setTouchInput({ steerAnalog: 0, pointerHeld: true });
     },
     [telemetry.phase]
   );
@@ -208,6 +206,14 @@ export default function App() {
   const handleSurfacePointerMove = useCallback((e: React.PointerEvent<HTMLElement>) => {
     const active = activePointerRef.current;
     if (!active || active.id !== e.pointerId) return;
+
+    // Safety check: if left mouse button was released without a pointerup reaching us, release immediately
+    if (e.pointerType === 'mouse' && (e.buttons & 1) === 0) {
+      activePointerRef.current = null;
+      setTouchDrag(INITIAL_TOUCH_DRAG);
+      engineRef.current?.setTouchInput({ steerAnalog: 0, pointerHeld: false });
+      return;
+    }
 
     const dx = e.clientX - active.startX;
     const dy = e.clientY - active.startY;
@@ -237,7 +243,7 @@ export default function App() {
       currentX: e.clientX,
       steerAnalog,
     });
-    engineRef.current?.setTouchInput({ steerAnalog });
+    engineRef.current?.setTouchInput({ steerAnalog, pointerHeld: true });
   }, []);
 
   const handleSurfacePointerEnd = useCallback((e: React.PointerEvent<HTMLElement>) => {
@@ -267,13 +273,37 @@ export default function App() {
       // Ignore
     }
     setTouchDrag(INITIAL_TOUCH_DRAG);
-    engineRef.current?.setTouchInput({ steerAnalog: 0 });
+    engineRef.current?.setTouchInput({ steerAnalog: 0, pointerHeld: false });
   }, []);
 
-  const handleSelectCourse = useCallback((id: CourseId) => {
-    setSelectedCourse(id);
+  const handleSelectMode = useCallback((mode: GameMode) => {
+    setGameMode(mode);
+    engineRef.current?.setGameMode(mode);
+  }, []);
+
+  const handleToggleBestGhost = useCallback(() => {
+    setSettings((prev) => {
+      const next: GameSettings = { ...prev, showBestGhost: !prev.showBestGhost };
+      saveGameSettings(next);
+      engineRef.current?.setGhostVisibility(next.showBestGhost, next.showLastGhost);
+      return next;
+    });
+  }, []);
+
+  const handleToggleLastGhost = useCallback(() => {
+    setSettings((prev) => {
+      const next: GameSettings = { ...prev, showLastGhost: !prev.showLastGhost };
+      saveGameSettings(next);
+      engineRef.current?.setGhostVisibility(next.showBestGhost, next.showLastGhost);
+      return next;
+    });
+  }, []);
+
+  const handleSelectCourseKey = useCallback((courseKey: string) => {
+    const resolved = resolveSubCourse(courseKey);
+    setSelectedCourseKey(resolved.courseKey);
     if (engineRef.current) {
-      engineRef.current.setCourse(id);
+      engineRef.current.setCourse(resolved.courseKey);
       setMinimapPoints(engineRef.current.getMinimapPoints());
     }
   }, []);
@@ -336,15 +366,6 @@ export default function App() {
     });
   }, []);
 
-  const handleSelectRaceBgm = useCallback((raceBgm: RaceBgmSelection) => {
-    setSettings((prev) => {
-      const next: GameSettings = { ...prev, raceBgm };
-      saveGameSettings(next);
-      return next;
-    });
-    void bgmRef.current?.previewSelection(raceBgm);
-  }, []);
-
   const handleCloseSettings = useCallback(() => {
     setSettingsOpen(false);
     bgmRef.current?.stopPreviewAndResumeMenu(settingsRef.current.raceBgm);
@@ -383,13 +404,19 @@ export default function App() {
       {/* Menu / Hangar & Podium Finish Overlay */}
       <MenuOverlay
         telemetry={telemetry}
-        selectedCourse={selectedCourse}
+        gameMode={gameMode}
+        showBestGhost={settings.showBestGhost}
+        showLastGhost={settings.showLastGhost}
+        selectedCourseKey={selectedCourseKey}
         selectedMachine={selectedMachine}
         speedClass={speedClass}
         collection={collection}
         bgmPreparing={bgmPreparing}
         soundMuted={muted}
-        onSelectCourse={handleSelectCourse}
+        onSelectMode={handleSelectMode}
+        onToggleBestGhost={handleToggleBestGhost}
+        onToggleLastGhost={handleToggleLastGhost}
+        onSelectCourseKey={handleSelectCourseKey}
         onSelectMachine={handleSelectMachine}
         onSelectClass={handleSelectClass}
         onStartRace={handleStartRace}
@@ -420,13 +447,12 @@ export default function App() {
       <SettingsModal
         open={settingsOpen}
         settings={settings}
-        bgmSnapshot={bgmSnapshot}
-        initialCourse={selectedCourse}
+        initialCourseKey={selectedCourseKey}
         initialSpeedClass={speedClass}
+        initialGameMode={gameMode}
         onClose={handleCloseSettings}
         onToggleBgm={handleToggleBgm}
         onToggleSfx={handleToggleSfx}
-        onSelectRaceBgm={handleSelectRaceBgm}
       />
 
       {/* In-Race Unobtrusive HUD */}
@@ -437,6 +463,8 @@ export default function App() {
           muted={muted}
           dockCollapsed={dockCollapsed}
           touchDrag={touchDrag}
+          showBestGhost={settings.showBestGhost}
+          showLastGhost={settings.showLastGhost}
           onToggleDock={() => setDockCollapsed((v) => !v)}
           onToggleMute={handleToggleMute}
           onTogglePause={handleTogglePause}

@@ -157,6 +157,7 @@ export class TrackItemSystem {
   public shockwaves: ActiveShockwave[] = [];
   public hitBursts: ActiveHitBurst[] = [];
   public dashRings: ActiveDashRing[] = [];
+  private showItems = true;
 
   private geometries: THREE.BufferGeometry[] = [];
   private materials: THREE.Material[] = [];
@@ -652,7 +653,8 @@ export class TrackItemSystem {
     ctx.fillStyle = 'rgba(7, 11, 20, 0.92)';
     ctx.fillRect(4, 4, w - 8, h - 8);
 
-    const accent = revealed && choice ? SUB_ITEMS[choice.itemKind].accentHex : '#06B6D4';
+    const accent =
+      this.showItems && revealed && choice ? SUB_ITEMS[choice.itemKind].accentHex : '#06B6D4';
     ctx.strokeStyle = accent;
     ctx.lineWidth = 6;
     ctx.strokeRect(7, 7, w - 14, h - 14);
@@ -669,7 +671,7 @@ export class TrackItemSystem {
     ctx.textAlign = 'right';
     ctx.fillStyle = accent;
     const itemLabel =
-      revealed && choice ? SUB_ITEMS[choice.itemKind].shortLabel : 'QUIZ GATE';
+      this.showItems && revealed && choice ? SUB_ITEMS[choice.itemKind].shortLabel : 'QUIZ GATE';
     ctx.fillText(itemLabel, w - 24, 32);
 
     ctx.textAlign = 'center';
@@ -694,6 +696,18 @@ export class TrackItemSystem {
     slot.signTexture.needsUpdate = true;
   }
 
+  public setShowItems(show: boolean): void {
+    this.showItems = show;
+    for (const row of this.rows) {
+      for (const lane of row.lanes) {
+        lane.spinner.visible = show && row.active;
+        if (!show) {
+          lane.padMat.color.set('#06B6D4');
+        }
+      }
+    }
+  }
+
   public setRowQuizDisplay(
     rowIndex: number,
     choices: GeneratedLaneChoice[] | null,
@@ -704,7 +718,7 @@ export class TrackItemSystem {
 
     row.lanes.forEach((slot, idx) => {
       const choice = choices ? choices[idx] : null;
-      if (choice) {
+      if (choice && this.showItems) {
         slot.kind = choice.itemKind;
         for (const k of Object.keys(slot.kindMeshes) as SubItemType[]) {
           slot.kindMeshes[k].visible = k === choice.itemKind;
@@ -714,6 +728,7 @@ export class TrackItemSystem {
       } else {
         slot.padMat.color.set('#06B6D4');
       }
+      slot.spinner.visible = this.showItems && row.active;
       this.drawSignboard(slot, choice, revealed);
     });
   }
@@ -724,7 +739,7 @@ export class TrackItemSystem {
     row.active = active;
     row.respawnTimer = active ? 0 : autoRespawn ? 4.0 : 9999;
     for (const lane of row.lanes) {
-      lane.spinner.visible = active;
+      lane.spinner.visible = this.showItems && active;
       lane.group.visible = active || autoRespawn;
     }
   }

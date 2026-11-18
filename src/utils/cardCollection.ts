@@ -141,15 +141,18 @@ export function formatQuizQuestion(description: string): string {
 export function generateQuizChallenge(
   usedTermIds: Set<number>,
   categoryId?: string | null,
-  difficulty: SpeedClass = 'normal'
+  difficulty: SpeedClass = 'normal',
+  subcategoryId?: string | null
 ): GeneratedQuiz {
   const allFlat = getAllFlatTerms();
   const collection = loadCardCollection();
   const termStats = loadTermStats();
 
-  const categoryPool = categoryId
-    ? allFlat.filter((ft) => ft.categoryId === categoryId)
-    : allFlat;
+  const categoryPool = subcategoryId
+    ? allFlat.filter((ft) => ft.subcategoryId === subcategoryId)
+    : categoryId
+      ? allFlat.filter((ft) => ft.categoryId === categoryId)
+      : allFlat;
   const scopedTerms = categoryPool.length >= 4 ? categoryPool : allFlat;
 
   let pool = scopedTerms.filter((ft) => !usedTermIds.has(ft.term.id));

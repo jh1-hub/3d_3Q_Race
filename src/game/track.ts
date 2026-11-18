@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ProceduralTextures } from './textures';
-import { COURSES, CourseId } from './types';
+import { CourseId, resolveSubCourse } from './types';
 
 export interface TrackSample {
   s: number; // 0..1 normalized progress
@@ -30,6 +30,7 @@ export interface FloatPad {
 
 export interface TrackData {
   courseId: CourseId;
+  courseKey: string;
   group: THREE.Group;
   samples: TrackSample[];
   totalLength: number;
@@ -46,7 +47,77 @@ export interface TrackData {
 const _tmpVec = new THREE.Vector3();
 const _worldUp = new THREE.Vector3(0, 1, 0);
 
-function getCourseControlPoints(courseId: CourseId): THREE.Vector3[] {
+function getCourseControlPoints(courseId: CourseId, variantIndex = 0): THREE.Vector3[] {
+  const baseY = courseId === 'skycity' ? 22 : courseId === 'lunar' ? 14 : 12;
+
+  if (variantIndex === 1) {
+    // Sub-course Variant 1: East-Bay Sweeping S-Loop
+    return [
+      new THREE.Vector3(0, baseY, 0),
+      new THREE.Vector3(0, baseY, -450),
+      new THREE.Vector3(220, baseY + 10, -840),
+      new THREE.Vector3(680, baseY + 18, -860),
+      new THREE.Vector3(960, baseY + 12, -460),
+      new THREE.Vector3(640, baseY + 4, -120),
+      new THREE.Vector3(920, baseY + 14, 280),
+      new THREE.Vector3(740, baseY + 20, 740),
+      new THREE.Vector3(280, baseY + 12, 820),
+      new THREE.Vector3(-80, baseY + 4, 500),
+      new THREE.Vector3(-20, baseY, 240),
+    ];
+  }
+
+  if (variantIndex === 2) {
+    // Sub-course Variant 2: West-Ridge High-Crest Circuit
+    return [
+      new THREE.Vector3(0, baseY, 0),
+      new THREE.Vector3(0, baseY, -460),
+      new THREE.Vector3(-260, baseY + 12, -840),
+      new THREE.Vector3(-740, baseY + 22, -780),
+      new THREE.Vector3(-960, baseY + 14, -360),
+      new THREE.Vector3(-680, baseY + 4, 40),
+      new THREE.Vector3(-880, baseY + 14, 440),
+      new THREE.Vector3(-560, baseY + 22, 840),
+      new THREE.Vector3(-120, baseY + 12, 820),
+      new THREE.Vector3(120, baseY + 4, 480),
+      new THREE.Vector3(40, baseY, 240),
+    ];
+  }
+
+  if (variantIndex === 3) {
+    // Sub-course Variant 3: Twin-Apex Deep Canyon Loop
+    return [
+      new THREE.Vector3(0, baseY, 0),
+      new THREE.Vector3(0, baseY, -480),
+      new THREE.Vector3(180, baseY + 14, -900),
+      new THREE.Vector3(-180, baseY + 22, -1120),
+      new THREE.Vector3(-640, baseY + 14, -920),
+      new THREE.Vector3(-760, baseY + 4, -440),
+      new THREE.Vector3(-420, baseY + 8, -80),
+      new THREE.Vector3(-620, baseY + 18, 380),
+      new THREE.Vector3(-340, baseY + 22, 780),
+      new THREE.Vector3(140, baseY + 12, 740),
+      new THREE.Vector3(80, baseY + 2, 340),
+    ];
+  }
+
+  if (variantIndex >= 4) {
+    // Sub-course Variant 4: Grand Perimeter Outer Ring
+    return [
+      new THREE.Vector3(0, baseY, 0),
+      new THREE.Vector3(0, baseY, -490),
+      new THREE.Vector3(-280, baseY + 14, -940),
+      new THREE.Vector3(-780, baseY + 20, -980),
+      new THREE.Vector3(-1060, baseY + 10, -540),
+      new THREE.Vector3(-920, baseY + 4, -40),
+      new THREE.Vector3(-540, baseY + 12, 220),
+      new THREE.Vector3(-740, baseY + 20, 680),
+      new THREE.Vector3(-380, baseY + 16, 940),
+      new THREE.Vector3(100, baseY + 8, 760),
+      new THREE.Vector3(60, baseY, 360),
+    ];
+  }
+
   switch (courseId) {
     case 'oceanic':
       return [
@@ -128,11 +199,12 @@ function isClearOfTrack(
 }
 
 export function createTrack(
-  courseId: CourseId,
+  courseKey: string,
   textures: ProceduralTextures,
   isSoftwareGl: boolean
 ): TrackData {
-  const courseSpec = COURSES.find((c) => c.id === courseId) ?? COURSES[0];
+  const courseSpec = resolveSubCourse(courseKey);
+  const courseId = courseSpec.baseCourseId;
   const group = new THREE.Group();
   const geometries: THREE.BufferGeometry[] = [];
   const materials: THREE.Material[] = [];
@@ -146,8 +218,8 @@ export function createTrack(
     return m;
   };
 
-  // Closed-loop 3D circuit waypoints (~4750-4950m smooth flowing curves)
-  const controlPoints = getCourseControlPoints(courseId);
+  // Closed-loop 3D circuit waypoints (~4750-5100m smooth flowing curves)
+  const controlPoints = getCourseControlPoints(courseId, courseSpec.variantIndex);
   const curve = new THREE.CatmullRomCurve3(controlPoints, true, 'catmullrom', 0.45);
   const totalLength = curve.getLength();
   const SAMPLE_COUNT = 1200;
@@ -424,7 +496,7 @@ export function createTrack(
   gantryGroup.add(lightBar);
   group.add(gantryGroup);
 
-  // Holographic Speed Arches along circuit (10 arches)
+  // Holographic Speed Arches along circuit (10 arches; Orbital gets grand gold-cyan double-halo portals)
   const archCount = 10;
   const archFrameGeo = trackGeo(new THREE.TorusGeometry(halfWidth + 0.6, 0.24, 8, 28, Math.PI));
   const archFrameMat = trackMat(
@@ -436,6 +508,23 @@ export function createTrack(
       roughness: 0.25,
     })
   );
+  const orbitalGrandOuterGeo =
+    courseId === 'orbital'
+      ? trackGeo(new THREE.TorusGeometry(halfWidth + 2.6, 0.34, 8, 32, Math.PI))
+      : null;
+  const orbitalGrandGoldMat =
+    courseId === 'orbital'
+      ? trackMat(
+          new THREE.MeshStandardMaterial({
+            color: 0xfbbf24,
+            emissive: 0xf59e0b,
+            emissiveIntensity: 1.8,
+            metalness: 0.6,
+            roughness: 0.2,
+          })
+        )
+      : null;
+
   for (let a = 1; a <= archCount; a++) {
     const idx = Math.floor((a / (archCount + 1)) * SAMPLE_COUNT);
     const s = samples[idx];
@@ -445,18 +534,33 @@ export function createTrack(
     arch.quaternion.setFromRotationMatrix(mat4);
     arch.position.copy(s.position).addScaledVector(s.up, 0.2);
     group.add(arch);
+
+    if (orbitalGrandOuterGeo && orbitalGrandGoldMat && a % 3 === 0) {
+      const grandArch = new THREE.Mesh(orbitalGrandOuterGeo, orbitalGrandGoldMat);
+      grandArch.quaternion.setFromRotationMatrix(mat4);
+      grandArch.position.copy(s.position).addScaledVector(s.up, 0.25);
+      group.add(grandArch);
+    }
   }
 
-  // Boost Pads (8 glowing chevron accelerators clear of quiz item gates at 0.48 and 0.95)
+  // Boost Pads (14 glowing chevron accelerators across center & outer lanes, clear of quiz gates at 0.48 and 0.95)
   const boostPadSpecs = [
     { s: 0.08, lateral: 0.0 },
+    { s: 0.11, lateral: -0.76 },
+    { s: 0.17, lateral: 0.76 },
     { s: 0.20, lateral: -0.35 },
+    { s: 0.29, lateral: -0.75 },
     { s: 0.33, lateral: 0.32 },
+    { s: 0.37, lateral: 0.76 },
     { s: 0.41, lateral: -0.25 },
-    { s: 0.56, lateral: 0.3 },
+    { s: 0.56, lateral: 0.30 },
+    { s: 0.59, lateral: -0.76 },
+    { s: 0.65, lateral: 0.75 },
     { s: 0.68, lateral: -0.32 },
     { s: 0.80, lateral: 0.28 },
+    { s: 0.83, lateral: -0.75 },
     { s: 0.88, lateral: 0.0 },
+    { s: 0.89, lateral: 0.76 },
   ];
   const boostPads: BoostPad[] = [];
   const bpGeo = trackGeo(new THREE.PlaneGeometry(3.8, 10.5));
@@ -496,34 +600,50 @@ export function createTrack(
     });
   }
 
-  // Aero Float Pads (5 per course, placed clear of boost pads and quiz gates at 0.48 & 0.95)
+  // Aero Float Pads (9 per course across center & outer lanes, placed clear of quiz gates at 0.48 & 0.95)
   const floatPadSpecsByCourse: Record<CourseId, { s: number; lateral: number }[]> = {
     orbital: [
       { s: 0.14, lateral: 0.25 },
+      { s: 0.23, lateral: 0.75 },
       { s: 0.27, lateral: -0.30 },
+      { s: 0.35, lateral: -0.75 },
       { s: 0.62, lateral: -0.22 },
+      { s: 0.64, lateral: -0.75 },
       { s: 0.74, lateral: 0.34 },
+      { s: 0.76, lateral: 0.75 },
       { s: 0.84, lateral: -0.28 },
     ],
     oceanic: [
       { s: 0.14, lateral: -0.26 },
+      { s: 0.23, lateral: -0.75 },
       { s: 0.27, lateral: 0.30 },
+      { s: 0.35, lateral: 0.75 },
       { s: 0.62, lateral: 0.24 },
+      { s: 0.64, lateral: 0.75 },
       { s: 0.74, lateral: -0.32 },
+      { s: 0.76, lateral: -0.75 },
       { s: 0.84, lateral: 0.26 },
     ],
     lunar: [
       { s: 0.14, lateral: 0.0 },
+      { s: 0.23, lateral: 0.75 },
       { s: 0.27, lateral: 0.32 },
+      { s: 0.35, lateral: -0.75 },
       { s: 0.62, lateral: -0.32 },
+      { s: 0.64, lateral: 0.75 },
       { s: 0.74, lateral: 0.0 },
+      { s: 0.76, lateral: -0.75 },
       { s: 0.84, lateral: 0.30 },
     ],
     skycity: [
       { s: 0.14, lateral: 0.32 },
+      { s: 0.23, lateral: -0.75 },
       { s: 0.27, lateral: -0.24 },
+      { s: 0.35, lateral: 0.75 },
       { s: 0.62, lateral: 0.28 },
+      { s: 0.64, lateral: -0.75 },
       { s: 0.74, lateral: -0.26 },
+      { s: 0.76, lateral: 0.75 },
       { s: 0.84, lateral: 0.0 },
     ],
   };
@@ -1061,40 +1181,114 @@ export function createTrack(
       group.add(island);
     }
   } else {
-    // 'orbital' (Default Cyber-Metropolis Basin + Megastructure Skyline)
-    const basinGeo = trackGeo(new THREE.PlaneGeometry(7200, 7200));
+    // 'orbital' — Grand Championship Cyber-Metropolis + Orbital Ring Nexus
+    const basinGeo = trackGeo(new THREE.PlaneGeometry(7600, 7600));
     basinGeo.rotateX(-Math.PI / 2);
     const basinMat = trackMat(
       new THREE.MeshStandardMaterial({
         map: textures.groundGridTexture,
-        roughness: 0.82,
-        metalness: 0.25,
+        roughness: 0.78,
+        metalness: 0.3,
       })
     );
     const basinMesh = new THREE.Mesh(basinGeo, basinMat);
     basinMesh.position.set(centerX, FLOOR_Y, centerZ);
     group.add(basinMesh);
 
-    const towerCount = 140;
+    // 1. High-Altitude Orbital Starfield Dome
+    const starCount = 850;
+    const starPos = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount; i++) {
+      const theta = ((i * 137.508) % 360) * (Math.PI / 180);
+      const phi = (((i * 73) % 72) + 12) * (Math.PI / 180);
+      const rad = 1950;
+      starPos[i * 3] = centerX + rad * Math.cos(phi) * Math.cos(theta);
+      starPos[i * 3 + 1] = rad * Math.sin(phi);
+      starPos[i * 3 + 2] = centerZ + rad * Math.cos(phi) * Math.sin(theta);
+    }
+    const starGeo = trackGeo(new THREE.BufferGeometry());
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+    const starMat = trackMat(
+      new THREE.PointsMaterial({ color: 0xbae6fd, size: 4.2, sizeAttenuation: true })
+    );
+    group.add(new THREE.Points(starGeo, starMat));
+
+    // 2. Colossal Stratospheric Orbital Ring Station & Relay Halo arching across the sky
+    const ringSteelMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: 0x1e293b,
+        metalness: 0.85,
+        roughness: 0.25,
+      })
+    );
+    const ringCyanMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: 0x22d3ee,
+        emissive: 0x06b6d4,
+        emissiveIntensity: 2.1,
+        roughness: 0.2,
+      })
+    );
+    const ringGoldMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: 0xfbbf24,
+        emissive: 0xf59e0b,
+        emissiveIntensity: 1.8,
+        roughness: 0.22,
+      })
+    );
+
+    const megaRingGroup = new THREE.Group();
+    megaRingGroup.position.set(centerX, -180, centerZ - 120);
+    megaRingGroup.rotation.set(Math.PI * 0.36, 0.24, -0.18);
+    const outerSteelRing = new THREE.Mesh(
+      trackGeo(new THREE.TorusGeometry(1280, 14, 12, 72)),
+      ringSteelMat
+    );
+    const innerGlowRing = new THREE.Mesh(
+      trackGeo(new THREE.TorusGeometry(1260, 5.5, 10, 72)),
+      ringCyanMat
+    );
+    const secondaryHalo = new THREE.Mesh(
+      trackGeo(new THREE.TorusGeometry(960, 4.5, 10, 64)),
+      ringGoldMat
+    );
+    secondaryHalo.rotation.set(0.32, -0.45, 0.2);
+    megaRingGroup.add(outerSteelRing, innerGlowRing, secondaryHalo);
+    group.add(megaRingGroup);
+
+    // 3. Metropolis Skyscrapers + Glowing Rooftop Crowns (InstancedMesh)
+    const towerCount = 150;
     const towerGeo = trackGeo(new THREE.BoxGeometry(1, 1, 1));
     const towerMat = trackMat(
       new THREE.MeshStandardMaterial({
         color: 0x0a1120,
         emissiveMap: textures.buildingEmissive,
         emissive: new THREE.Color(0x94a3b8),
-        emissiveIntensity: 0.85,
-        metalness: 0.55,
-        roughness: 0.55,
+        emissiveIntensity: 0.92,
+        metalness: 0.6,
+        roughness: 0.45,
+      })
+    );
+    const crownGeo = trackGeo(new THREE.BoxGeometry(1.04, 2.8, 1.04));
+    const crownMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        emissive: 0x06b6d4,
+        emissiveIntensity: 1.85,
+        roughness: 0.2,
       })
     );
     const towerInstanced = new THREE.InstancedMesh(towerGeo, towerMat, towerCount);
+    const crownInstanced = new THREE.InstancedMesh(crownGeo, crownMat, towerCount);
     const tintColor = new THREE.Color();
+    const crownColor = new THREE.Color();
     let placed = 0;
     let attempt = 0;
-    while (placed < towerCount && attempt < 1100) {
+    while (placed < towerCount && attempt < 1200) {
       attempt++;
       const angle = ((attempt * 137.508) % 360) * (Math.PI / 180);
-      const dist = 120 + ((attempt * 97) % 1350);
+      const dist = 120 + ((attempt * 97) % 1380);
       const tx = centerX + Math.cos(angle) * dist;
       const tz = centerZ + Math.sin(angle) * dist;
 
@@ -1102,16 +1296,32 @@ export function createTrack(
 
       const w = 24 + ((attempt * 23) % 42);
       const d = 24 + ((attempt * 31) % 42);
-      const h = 75 + ((attempt * 83) % 210);
+      const h = 80 + ((attempt * 83) % 230);
+      const rotY = ((attempt * 13) % 4) * (Math.PI / 2);
+
       dummy.position.set(tx, FLOOR_Y + h / 2, tz);
-      dummy.rotation.set(0, ((attempt * 13) % 4) * (Math.PI / 2), 0);
+      dummy.rotation.set(0, rotY, 0);
       dummy.scale.set(w, h, d);
       dummy.updateMatrix();
       towerInstanced.setMatrixAt(placed, dummy.matrix);
 
-      const shade = 0.7 + ((attempt % 5) * 0.08);
-      tintColor.setRGB(shade * 0.85, shade * 0.95, shade * 1.1);
+      dummy.position.set(tx, FLOOR_Y + h + 1.4, tz);
+      dummy.scale.set(w, 1, d);
+      dummy.updateMatrix();
+      crownInstanced.setMatrixAt(placed, dummy.matrix);
+
+      const shade = 0.72 + (attempt % 5) * 0.08;
+      tintColor.setRGB(shade * 0.85, shade * 0.98, shade * 1.15);
       towerInstanced.setColorAt(placed, tintColor);
+
+      if (attempt % 4 === 0) {
+        crownColor.setHex(0xfbbf24);
+      } else if (attempt % 3 === 0) {
+        crownColor.setHex(0xa855f7);
+      } else {
+        crownColor.setHex(0x22d3ee);
+      }
+      crownInstanced.setColorAt(placed, crownColor);
       placed++;
     }
     towerInstanced.count = placed;
@@ -1119,6 +1329,72 @@ export function createTrack(
     if (towerInstanced.instanceColor) towerInstanced.instanceColor.needsUpdate = true;
     towerInstanced.computeBoundingSphere();
     group.add(towerInstanced);
+
+    crownInstanced.count = placed;
+    crownInstanced.instanceMatrix.needsUpdate = true;
+    if (crownInstanced.instanceColor) crownInstanced.instanceColor.needsUpdate = true;
+    crownInstanced.computeBoundingSphere();
+    group.add(crownInstanced);
+
+    // 4. Grand Category Nexus Citadels (Uniting Teal, Orange, Violet & Champion Gold beacons)
+    const nexusBaseGeo = trackGeo(new THREE.CylinderGeometry(30, 38, 22, 8));
+    const nexusShaftGeo = trackGeo(new THREE.CylinderGeometry(11, 20, 150, 8));
+    const nexusNeedleGeo = trackGeo(new THREE.CylinderGeometry(1.4, 4.5, 95, 8));
+    const nexusRingGeo = trackGeo(new THREE.TorusGeometry(26, 2.0, 10, 28));
+    nexusRingGeo.rotateX(Math.PI / 2);
+
+    const nexusMetalMat = trackMat(
+      new THREE.MeshStandardMaterial({ color: 0x162238, metalness: 0.78, roughness: 0.25 })
+    );
+    const domainColors = [0x06b6d4, 0x14b8a6, 0xf97316, 0xa855f7];
+    const domainMats = domainColors.map((col) =>
+      trackMat(
+        new THREE.MeshStandardMaterial({
+          color: col,
+          emissive: col,
+          emissiveIntensity: 2.1,
+          roughness: 0.2,
+        })
+      )
+    );
+
+    const nexusSpots: [number, number, number][] = [
+      [centerX + 40, centerZ - 140, 0],
+      [centerX - 380, centerZ - 420, 1],
+      [centerX + 340, centerZ + 220, 2],
+      [centerX - 360, centerZ + 380, 3],
+      [centerX + 420, centerZ - 320, 0],
+      [centerX - 140, centerZ + 620, 1],
+    ];
+    for (const [nx, nz, colorIdx] of nexusSpots) {
+      if (!isClearOfTrack(nx, nz, samples, 76)) continue;
+      const nexus = new THREE.Group();
+      nexus.position.set(nx, FLOOR_Y, nz);
+
+      const base = new THREE.Mesh(nexusBaseGeo, nexusMetalMat);
+      base.position.y = 11;
+      nexus.add(base);
+
+      const shaft = new THREE.Mesh(nexusShaftGeo, nexusMetalMat);
+      shaft.position.y = 95;
+      nexus.add(shaft);
+
+      const accentMat = domainMats[colorIdx % domainMats.length];
+      const lowerRing = new THREE.Mesh(nexusRingGeo, accentMat);
+      lowerRing.position.y = 65;
+      nexus.add(lowerRing);
+
+      const upperRing = new THREE.Mesh(nexusRingGeo, ringGoldMat);
+      upperRing.scale.setScalar(0.75);
+      upperRing.position.y = 138;
+      nexus.add(upperRing);
+
+      const needle = new THREE.Mesh(nexusNeedleGeo, accentMat);
+      needle.position.y = 212;
+      nexus.add(needle);
+
+      group.add(nexus);
+    }
   }
 
   // Compute normalized 2D minimap coordinates
@@ -1197,6 +1473,7 @@ export function createTrack(
 
   return {
     courseId,
+    courseKey: courseSpec.courseKey,
     group,
     samples,
     totalLength,

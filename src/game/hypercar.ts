@@ -26,8 +26,13 @@ export function createHypercarMesh(
   accentColor: number,
   shadowTexture: THREE.Texture,
   castShadow: boolean,
-  chassisStyle: ChassisStyle = 'valkyrie'
+  chassisStyle: ChassisStyle = 'valkyrie',
+  ghostOpacity: number | null = null
 ): HypercarModel {
+  const isGhost = ghostOpacity !== null;
+  const gOpacity = ghostOpacity ?? 1;
+  const effectiveCastShadow = isGhost ? false : castShadow;
+
   const root = new THREE.Group();
   const chassisGroup = new THREE.Group();
   // Hover height above track surface (lowest turbine coil at -0.32 -> +0.48m clear above deck)
@@ -46,71 +51,131 @@ export function createHypercarMesh(
     return m;
   };
 
-  // Distinct PBR materials with >= 0.25 roughness/metalness contrast
+  // Distinct PBR materials (or translucent holographic materials when rendered as a ghost)
   const hullMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
-      color: bodyColor,
-      metalness: chassisStyle === 'tempest' ? 0.65 : 0.85,
-      roughness: chassisStyle === 'tempest' ? 0.34 : 0.18,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.08,
-    })
+    isGhost
+      ? new THREE.MeshStandardMaterial({
+          color: accentColor,
+          emissive: accentColor,
+          emissiveIntensity: 0.72,
+          roughness: 0.3,
+          metalness: 0.2,
+          transparent: true,
+          opacity: gOpacity,
+          depthWrite: false,
+        })
+      : new THREE.MeshPhysicalMaterial({
+          color: bodyColor,
+          metalness: chassisStyle === 'tempest' ? 0.65 : 0.85,
+          roughness: chassisStyle === 'tempest' ? 0.34 : 0.18,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.08,
+        })
   );
 
   const secondaryMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
-      color: secondaryColor,
-      metalness: 0.78,
-      roughness: 0.26,
-      clearcoat: 0.85,
-      clearcoatRoughness: 0.12,
-    })
+    isGhost
+      ? new THREE.MeshStandardMaterial({
+          color: secondaryColor,
+          emissive: accentColor,
+          emissiveIntensity: 0.45,
+          roughness: 0.35,
+          metalness: 0.2,
+          transparent: true,
+          opacity: gOpacity * 0.9,
+          depthWrite: false,
+        })
+      : new THREE.MeshPhysicalMaterial({
+          color: secondaryColor,
+          metalness: 0.78,
+          roughness: 0.26,
+          clearcoat: 0.85,
+          clearcoatRoughness: 0.12,
+        })
   );
 
   const carbonMat = trackMat(
-    new THREE.MeshStandardMaterial({
-      color: 0x0f172a,
-      metalness: 0.25,
-      roughness: 0.72,
-    })
+    isGhost
+      ? new THREE.MeshStandardMaterial({
+          color: accentColor,
+          emissive: accentColor,
+          emissiveIntensity: 0.35,
+          metalness: 0.2,
+          roughness: 0.5,
+          transparent: true,
+          opacity: gOpacity * 0.75,
+          depthWrite: false,
+        })
+      : new THREE.MeshStandardMaterial({
+          color: 0x0f172a,
+          metalness: 0.25,
+          roughness: 0.72,
+        })
   );
 
   const canopyMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
-      color: 0x070d18,
-      metalness: 0.18,
-      roughness: 0.06,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.04,
-      envMapIntensity: 1.7,
-    })
+    isGhost
+      ? new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          emissive: accentColor,
+          emissiveIntensity: 0.6,
+          roughness: 0.2,
+          transparent: true,
+          opacity: gOpacity * 0.65,
+          depthWrite: false,
+        })
+      : new THREE.MeshPhysicalMaterial({
+          color: 0x070d18,
+          metalness: 0.18,
+          roughness: 0.06,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.04,
+          envMapIntensity: 1.7,
+        })
   );
 
   const brushedTitaniumMat = trackMat(
-    new THREE.MeshPhysicalMaterial({
-      color: 0x94a3b8,
-      metalness: 0.92,
-      roughness: 0.28,
-      anisotropy: 0.7,
-    })
+    isGhost
+      ? new THREE.MeshStandardMaterial({
+          color: accentColor,
+          emissive: accentColor,
+          emissiveIntensity: 0.45,
+          metalness: 0.3,
+          roughness: 0.3,
+          transparent: true,
+          opacity: gOpacity * 0.8,
+          depthWrite: false,
+        })
+      : new THREE.MeshPhysicalMaterial({
+          color: 0x94a3b8,
+          metalness: 0.92,
+          roughness: 0.28,
+          anisotropy: 0.7,
+        })
   );
 
   const accentGlowMat = trackMat(
     new THREE.MeshStandardMaterial({
       color: accentColor,
       emissive: accentColor,
-      emissiveIntensity: 2.3,
+      emissiveIntensity: isGhost ? 1.4 : 2.3,
       roughness: 0.2,
       metalness: 0.1,
+      transparent: isGhost,
+      opacity: isGhost ? Math.min(1, gOpacity * 1.45) : 1,
+      depthWrite: !isGhost,
     })
   );
 
   const tailLightMat = trackMat(
     new THREE.MeshStandardMaterial({
-      color: 0xff2a4b,
-      emissive: 0xff1e42,
-      emissiveIntensity: 2.4,
+      color: isGhost ? accentColor : 0xff2a4b,
+      emissive: isGhost ? accentColor : 0xff1e42,
+      emissiveIntensity: isGhost ? 1.3 : 2.4,
       roughness: 0.2,
+      transparent: isGhost,
+      opacity: isGhost ? Math.min(1, gOpacity * 1.35) : 1,
+      depthWrite: !isGhost,
     })
   );
 
@@ -118,7 +183,8 @@ export function createHypercarMesh(
     new THREE.MeshBasicMaterial({
       color: accentColor,
       transparent: true,
-      opacity: 0.88,
+      opacity: isGhost ? gOpacity * 0.85 : 0.88,
+      depthWrite: false,
     })
   );
 
@@ -161,7 +227,7 @@ export function createHypercarMesh(
     coreGeo.rotateY(-Math.PI / 2);
     coreGeo.computeVertexNormals();
     const coreMesh = new THREE.Mesh(coreGeo, hullMat);
-    coreMesh.castShadow = castShadow;
+    coreMesh.castShadow = effectiveCastShadow;
     coreMesh.receiveShadow = true;
     chassisGroup.add(coreMesh);
 
@@ -174,7 +240,7 @@ export function createHypercarMesh(
     [-0.64, 0.64].forEach((px) => {
       const prong = new THREE.Mesh(prongGeo, secondaryMat);
       prong.position.set(px, -0.02, 1.55);
-      prong.castShadow = castShadow;
+      prong.castShadow = effectiveCastShadow;
       chassisGroup.add(prong);
 
       const tip = new THREE.Mesh(prongTipGeo, hullMat);
@@ -193,7 +259,7 @@ export function createHypercarMesh(
       const wing = new THREE.Mesh(wingGeo, hullMat);
       wing.position.set(side * 1.12, 0.06, -1.05);
       wing.rotation.y = side * -0.44;
-      wing.castShadow = castShadow;
+      wing.castShadow = effectiveCastShadow;
       chassisGroup.add(wing);
 
       const wingEdgeGeo = trackGeo(new THREE.BoxGeometry(1.35, 0.04, 0.1));
@@ -224,7 +290,7 @@ export function createHypercarMesh(
     sharkGeo.translate(0, 0, -0.04);
     sharkGeo.rotateY(-Math.PI / 2);
     const sharkFin = new THREE.Mesh(sharkGeo, secondaryMat);
-    sharkFin.castShadow = castShadow;
+    sharkFin.castShadow = effectiveCastShadow;
     chassisGroup.add(sharkFin);
 
     // 4 Turbine Pods
@@ -285,7 +351,7 @@ export function createHypercarMesh(
     hullGeo.rotateY(-Math.PI / 2);
     hullGeo.computeVertexNormals();
     const hullMesh = new THREE.Mesh(hullGeo, hullMat);
-    hullMesh.castShadow = castShadow;
+    hullMesh.castShadow = effectiveCastShadow;
     hullMesh.receiveShadow = true;
     chassisGroup.add(hullMesh);
 
@@ -294,7 +360,7 @@ export function createHypercarMesh(
     [-0.78, 0.78].forEach((cx) => {
       const cowl = new THREE.Mesh(cowlGeo, secondaryMat);
       cowl.position.set(cx, 0.24, -0.25);
-      cowl.castShadow = castShadow;
+      cowl.castShadow = effectiveCastShadow;
       chassisGroup.add(cowl);
     });
 
@@ -327,7 +393,7 @@ export function createHypercarMesh(
       const fWing = new THREE.Mesh(fWingGeo, secondaryMat);
       fWing.position.set(side * 1.28, 0.08, 0.15);
       fWing.rotation.y = side * 0.38;
-      fWing.castShadow = castShadow;
+      fWing.castShadow = effectiveCastShadow;
       chassisGroup.add(fWing);
 
       const tipPod = new THREE.Mesh(tipPodGeo, hullMat);
@@ -346,7 +412,7 @@ export function createHypercarMesh(
       const vTail = new THREE.Mesh(vTailGeo, hullMat);
       vTail.position.set(side * 0.78, 0.62, -1.78);
       vTail.rotation.z = side * -0.48;
-      vTail.castShadow = castShadow;
+      vTail.castShadow = effectiveCastShadow;
       chassisGroup.add(vTail);
     });
 
@@ -411,21 +477,21 @@ export function createHypercarMesh(
     hullGeo.computeVertexNormals();
 
     const hullMesh = new THREE.Mesh(hullGeo, hullMat);
-    hullMesh.castShadow = castShadow;
+    hullMesh.castShadow = effectiveCastShadow;
     hullMesh.receiveShadow = true;
     chassisGroup.add(hullMesh);
 
     // Cobalt Racing Sidepods + Carbon Undertray
     const undertray = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.88, 0.14, 4.3)), carbonMat);
     undertray.position.set(0, -0.15, -0.05);
-    undertray.castShadow = castShadow;
+    undertray.castShadow = effectiveCastShadow;
     chassisGroup.add(undertray);
 
     const sidePodGeo = trackGeo(new THREE.BoxGeometry(0.28, 0.22, 2.7));
     [-0.92, 0.92].forEach((sx) => {
       const sp = new THREE.Mesh(sidePodGeo, secondaryMat);
       sp.position.set(sx, 0.12, -0.35);
-      sp.castShadow = castShadow;
+      sp.castShadow = effectiveCastShadow;
       chassisGroup.add(sp);
     });
 
@@ -451,7 +517,7 @@ export function createHypercarMesh(
     canopyGeo.computeVertexNormals();
     const canopyMesh = new THREE.Mesh(canopyGeo, canopyMat);
     canopyMesh.position.set(0, 0.36, -0.05);
-    canopyMesh.castShadow = castShadow;
+    canopyMesh.castShadow = effectiveCastShadow;
     chassisGroup.add(canopyMesh);
 
     // Forward Canards + Cyan LED Blades
@@ -461,7 +527,7 @@ export function createHypercarMesh(
       canard.position.set(side * 1.02, -0.02, 1.52);
       canard.rotation.y = side * -0.22;
       canard.rotation.z = side * -0.08;
-      canard.castShadow = castShadow;
+      canard.castShadow = effectiveCastShadow;
       chassisGroup.add(canard);
 
       const blade = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.62, 0.035, 0.08)), accentGlowMat);
@@ -479,7 +545,7 @@ export function createHypercarMesh(
     ].forEach(([px, pz]) => {
       const pod = new THREE.Mesh(podGeo, brushedTitaniumMat);
       pod.position.set(px, -0.16, pz);
-      pod.castShadow = castShadow;
+      pod.castShadow = effectiveCastShadow;
       chassisGroup.add(pod);
       const coil = new THREE.Mesh(coilGeo, accentGlowMat);
       coil.position.set(px, -0.28, pz);
@@ -492,14 +558,14 @@ export function createHypercarMesh(
       const fin = new THREE.Mesh(finGeo, secondaryMat);
       fin.position.set(side * 0.88, 0.56, -1.85);
       fin.rotation.z = side * -0.22;
-      fin.castShadow = castShadow;
+      fin.castShadow = effectiveCastShadow;
       chassisGroup.add(fin);
     });
 
     const wingMesh = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.3, 0.08, 0.44)), carbonMat);
     wingMesh.position.set(0, 0.84, -2.08);
     wingMesh.rotation.x = 0.12;
-    wingMesh.castShadow = castShadow;
+    wingMesh.castShadow = effectiveCastShadow;
     chassisGroup.add(wingMesh);
 
     const wingTrim = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.34, 0.03, 0.08)), accentGlowMat);
@@ -539,7 +605,7 @@ export function createHypercarMesh(
     new THREE.MeshBasicMaterial({
       map: shadowTexture,
       transparent: true,
-      opacity: 0.62,
+      opacity: isGhost ? 0.18 : 0.62,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -1,

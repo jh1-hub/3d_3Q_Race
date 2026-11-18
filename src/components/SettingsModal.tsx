@@ -1,18 +1,25 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Check,
-  ChevronDown,
   Download,
+  Flag,
   Loader2,
   Music,
   Settings,
+  Timer,
   Trophy,
   Volume2,
   VolumeX,
   X,
 } from 'lucide-react';
-import { BgmSnapshot } from '../game/bgm';
-import { COURSES, CourseId, MACHINES, SpeedClass } from '../game/types';
+import {
+  CourseId,
+  COURSES,
+  GameMode,
+  MACHINES,
+  resolveSubCourse,
+  SpeedClass,
+} from '../game/types';
 import { formatRaceTime } from '../utils/formatTime';
 import {
   checkAllBgmCached,
@@ -20,22 +27,17 @@ import {
   usePWAInstall,
 } from '../utils/pwa';
 import { getCourseRankings } from '../utils/rankings';
-import {
-  GameSettings,
-  RACE_BGM_TRACKS,
-  RaceBgmSelection,
-} from '../utils/settings';
+import { GameSettings } from '../utils/settings';
 
 interface SettingsModalProps {
   open: boolean;
   settings: GameSettings;
-  bgmSnapshot: BgmSnapshot;
-  initialCourse: CourseId;
+  initialCourseKey: string;
   initialSpeedClass: SpeedClass;
+  initialGameMode: GameMode;
   onClose: () => void;
   onToggleBgm: () => void;
   onToggleSfx: () => void;
-  onSelectRaceBgm: (selection: RaceBgmSelection) => void;
 }
 
 type SettingsTab = 'audio' | 'rankings';
@@ -43,17 +45,19 @@ type SettingsTab = 'audio' | 'rankings';
 export function SettingsModal({
   open,
   settings,
-  bgmSnapshot,
-  initialCourse,
+  initialCourseKey,
   initialSpeedClass,
+  initialGameMode,
   onClose,
   onToggleBgm,
   onToggleSfx,
-  onSelectRaceBgm,
 }: SettingsModalProps) {
   const [tab, setTab] = useState<SettingsTab>('audio');
-  const [rankingCourse, setRankingCourse] = useState<CourseId>(initialCourse);
+  const [rankingCourseId, setRankingCourseId] = useState<CourseId>(() =>
+    resolveSubCourse(initialCourseKey).baseCourseId
+  );
   const [rankingClass, setRankingClass] = useState<SpeedClass>(initialSpeedClass);
+  const [rankingMode, setRankingMode] = useState<GameMode>(initialGameMode);
 
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
   const [showInstallModal, setShowInstallModal] = useState(false);
@@ -63,25 +67,21 @@ export function SettingsModal({
 
   useEffect(() => {
     if (open) {
-      setRankingCourse(initialCourse);
+      setRankingCourseId(resolveSubCourse(initialCourseKey).baseCourseId);
       setRankingClass(initialSpeedClass);
+      setRankingMode(initialGameMode);
       void checkAllBgmCached().then((ok) => setOfflineReady(ok));
     } else {
       setShowInstallModal(false);
     }
-  }, [open, initialCourse, initialSpeedClass]);
+  }, [open, initialCourseKey, initialSpeedClass, initialGameMode]);
 
   const rankings = useMemo(
-    () => (open ? getCourseRankings(rankingCourse, rankingClass) : []),
-    [open, rankingCourse, rankingClass]
+    () => (open ? getCourseRankings(rankingCourseId, rankingClass, rankingMode) : []),
+    [open, rankingCourseId, rankingClass, rankingMode]
   );
 
   if (!open) return null;
-
-  const activeTrackId =
-    settings.raceBgm === 'random' ? bgmSnapshot.upcomingRandomTrackId : settings.raceBgm;
-  const activeTrackMeta = RACE_BGM_TRACKS.find((t) => t.id === activeTrackId);
-  const activeTrackStatus = bgmSnapshot.statuses[activeTrackId];
 
   const handleDownloadClick = async () => {
     setShowInstallModal(true);
@@ -223,55 +223,6 @@ export function SettingsModal({
                 </button>
               </div>
 
-              {/* Compact Race BGM Dropdown List */}
-              <div className="border-t border-white/10 pt-4">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <label
-                    htmlFor="race-bgm-select"
-                    className="text-xs font-semibold tracking-wider text-slate-300"
-                  >
-                    レースBGM
-                  </label>
-                  <span className="flex items-center gap-1.5 text-[11px] font-mono-num text-slate-400">
-                    {settings.raceBgm === 'random' && activeTrackMeta
-                      ? `次回: ${activeTrackMeta.title} · `
-                      : ''}
-                    {activeTrackStatus === 'ready' ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-400">
-                        <Check className="h-3 w-3" />
-                        準備完了
-                      </span>
-                    ) : activeTrackStatus === 'loading' ? (
-                      <span className="inline-flex items-center gap-1 text-cyan-300">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        読込中
-                      </span>
-                    ) : activeTrackStatus === 'error' ? (
-                      <span className="text-red-400">読込失敗</span>
-                    ) : (
-                      <span>未読込</span>
-                    )}
-                  </span>
-                </div>
-
-                <div className="relative">
-                  <select
-                    id="race-bgm-select"
-                    value={settings.raceBgm}
-                    onChange={(e) => onSelectRaceBgm(e.target.value as RaceBgmSelection)}
-                    className="min-h-[46px] w-full appearance-none rounded-xl border border-white/15 bg-slate-900 px-4 py-2.5 pr-10 text-sm font-semibold text-white transition-colors hover:border-cyan-400/50 focus:border-cyan-400 focus:outline-none cursor-pointer"
-                  >
-                    <option value="random">ランダム再生（デフォルト）</option>
-                    {RACE_BGM_TRACKS.map((track) => (
-                      <option key={track.id} value={track.id}>
-                        {track.title}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                </div>
-              </div>
-
               {/* Clean Single PWA Download Button (No upfront clutter) */}
               <div className="border-t border-white/10 pt-4">
                 <button
@@ -302,16 +253,16 @@ export function SettingsModal({
             </div>
           ) : (
             <div className="space-y-4">
-              {/* Course + Difficulty Filter */}
+              {/* Course + Mode + Difficulty Filter */}
               <div className="flex flex-col gap-2.5">
                 <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
                   {COURSES.map((c) => {
-                    const active = rankingCourse === c.id;
+                    const active = rankingCourseId === c.id;
                     return (
                       <button
                         key={c.id}
                         type="button"
-                        onClick={() => setRankingCourse(c.id)}
+                        onClick={() => setRankingCourseId(c.id)}
                         className={`min-h-[44px] rounded-lg border px-2.5 py-2 text-xs font-bold transition-colors cursor-pointer truncate ${
                           active
                             ? 'bg-slate-900 text-white'
@@ -325,10 +276,36 @@ export function SettingsModal({
                   })}
                 </div>
 
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-slate-400">
-                    トータルタイム 自己ベスト TOP 5
-                  </span>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  {/* Race vs Time Attack Mode Filter */}
+                  <div className="flex items-center gap-1 rounded-lg bg-slate-900 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setRankingMode('race')}
+                      className={`flex min-h-[36px] items-center gap-1.5 rounded-md px-3 py-1 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                        rankingMode === 'race'
+                          ? 'bg-cyan-500 text-slate-950'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      <Flag className="h-3 w-3" />
+                      <span>レース</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRankingMode('time_attack')}
+                      className={`flex min-h-[36px] items-center gap-1.5 rounded-md px-3 py-1 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                        rankingMode === 'time_attack'
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      <Timer className="h-3 w-3" />
+                      <span>タイムアタック</span>
+                    </button>
+                  </div>
+
+                  {/* Normal vs Hard Filter */}
                   <div className="flex items-center gap-1 rounded-lg bg-slate-900 p-1">
                     <button
                       type="button"
@@ -354,6 +331,10 @@ export function SettingsModal({
                     </button>
                   </div>
                 </div>
+
+                <div className="font-display text-[11px] tracking-wider text-slate-400">
+                  TOTAL TIME TOP 5（通常3LAPのみ記録）
+                </div>
               </div>
 
               {/* Rankings List */}
@@ -364,7 +345,7 @@ export function SettingsModal({
                     まだ記録がありません
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
-                    このコース・難易度で3ラップ完走するとTOP 5に記録されます。
+                    このコース・モード・難易度で3ラップ完走するとTOP 5に記録されます。
                   </p>
                 </div>
               ) : (
@@ -402,9 +383,11 @@ export function SettingsModal({
                               <span className="font-display text-sm font-bold text-white truncate">
                                 {entry.machineName}
                               </span>
-                              <span className="text-[11px] text-slate-400 font-mono-num">
-                                {entry.rankFinished}位完走
-                              </span>
+                              {rankingMode === 'race' && (
+                                <span className="text-[11px] text-slate-400 font-mono-num">
+                                  {entry.rankFinished}位完走
+                                </span>
+                              )}
                             </div>
                             {entry.lapTimesMs.length > 0 && (
                               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-slate-400 font-mono-num">

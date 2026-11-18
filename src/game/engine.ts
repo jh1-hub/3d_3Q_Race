@@ -9,9 +9,8 @@ import {
   ActiveQuizTelemetry,
   ChassisStyle,
   CourseId,
-  COURSES,
-  CourseSpec,
   EarnedRaceCard,
+  GameMode,
   GamePhase,
   HitAlertTelemetry,
   IncomingThreatType,
@@ -23,8 +22,10 @@ import {
   QuizFeedbackTelemetry,
   RacerStanding,
   RaceTelemetry,
+  resolveSubCourse,
   SpeedClass,
   SUB_ITEMS,
+  SubCourseSpec,
   SubItemType,
 } from './types';
 import {
@@ -33,6 +34,21 @@ import {
   recordCollectedCard,
   recordTermAnswer,
 } from '../utils/cardCollection';
+import {
+  GHOST_FLAG_BOOST,
+  GHOST_FLAG_GLOW,
+  GHOST_FLAG_HIT_SPIN,
+  GHOST_FLAG_HOVER,
+  GHOST_FLAG_SUPER_TURBO,
+  GhostFrameTuple,
+  GhostRecording,
+  GhostSampleOut,
+  loadBestGhost,
+  loadLastGhost,
+  packGhostFrame,
+  saveTimeAttackGhosts,
+} from '../utils/ghosts';
+import { sampleGhostAtTime } from '../utils/ghosts';
 import { recordTotalTimeRanking } from '../utils/rankings';
 
 interface RacerState {
@@ -80,10 +96,43 @@ interface RacerState {
 
 export interface TouchInputState {
   steerAnalog: number; // -1 (right) .. +1 (left)
+  pointerHeld: boolean; // mouse left-click or touch tap held
 }
 
 const BEST_LAP_STORAGE_KEY = 'hyperion_gp_best_lap_ms';
-const TOTAL_LAPS = 3;
+
+const HIDDEN_WRONG_PENALTY: Record<
+  MachineId,
+  {
+    spinDur: number;
+    penaltyDur: number;
+    speedMult: number;
+    spinMaxMult: number;
+    recoveryMaxMult: number;
+  }
+> = {
+  phantom: {
+    spinDur: 2.2,
+    penaltyDur: 4.5,
+    speedMult: 0.28,
+    spinMaxMult: 0.40,
+    recoveryMaxMult: 0.76,
+  },
+  valkyrie: {
+    spinDur: 2.9,
+    penaltyDur: 6.4,
+    speedMult: 0.16,
+    spinMaxMult: 0.30,
+    recoveryMaxMult: 0.66,
+  },
+  tempest: {
+    spinDur: 3.9,
+    penaltyDur: 8.8,
+    speedMult: 0.05,
+    spinMaxMult: 0.20,
+    recoveryMaxMult: 0.54,
+  },
+};
 
 // Pre-allocated math scratchpads (Zero GC in render loop)
 const _vA = new THREE.Vector3();
@@ -132,6 +181,24 @@ const _sampleFront: TrackSample = {
   up: new THREE.Vector3(),
   bankAngle: 0,
 };
+const _ghostPos = new THREE.Vector3();
+const _ghostQuat = new THREE.Quaternion();
+const _ghostSampleBest: GhostSampleOut = {
+  s: 0,
+  lateral: 0,
+  yawAngle: 0,
+  hoverLift: 0,
+  flags: 0,
+  finished: false,
+};
+const _ghostSampleLast: GhostSampleOut = {
+  s: 0,
+  lateral: 0,
+  yawAngle: 0,
+  hoverLift: 0,
+  flags: 0,
+  finished: false,
+};
 
 function detectSoftwareWebGL(): boolean {
   const gl = document.createElement('canvas').getContext('webgl2');
@@ -167,16 +234,32 @@ export class RaceEngine {
   private clock = new THREE.Clock();
 
   private phase: GamePhase = 'menu';
+  private gameMode: GameMode = 'race';
+  private showBestGhost = true;
+  private showLastGhost = true;
+  private courseKey = 'orbital';
   private courseId: CourseId = 'orbital';
-  private machineId: MachineId = 'valkyrie';
+  private machineId: MachineId = 'phantom';
   private speedClass: SpeedClass = 'normal';
 
   private racers: RacerState[] = [];
   private playerRacer!: RacerState;
 
+  private bestGhostRec: GhostRecording | null = null;
+  private lastGhostRec: GhostRecording | null = null;
+  private bestGhostModel: HypercarModel | null = null;
+  private lastGhostModel: HypercarModel | null = null;
+  private bestGhostPhase = 0;
+  private lastGhostPhase = 0;
+  private prevBestGhostFlags = 0;
+  private prevLastGhostFlags = 0;
+  private recordedFrames: GhostFrameTuple[] = [];
+  private recordSampleAccum = 0;
+
   private keys: Record<string, boolean> = {};
   private touchInput: TouchInputState = {
     steerAnalog: 0,
+    pointerHeld: false,
   };
 
   private countdownTimer = 0;
@@ -214,6 +297,7 @@ export class RaceEngine {
   private quizFeedback: QuizFeedbackTelemetry | null = null;
   private quizFeedbackTimer = 0;
   private assistedLaneIndex: number | null = null;
+  private manualGauge = 0;
 
   private onTelemetry: (telemetry: RaceTelemetry) => void;
   private onContextLostCb: (lost: boolean) => void;
@@ -230,7 +314,7 @@ export class RaceEngine {
     this.onContextLostCb = onContextLost;
     this.onCollectionChange = onCollectionChange;
 
-    this.loadBestLapForCourse(this.courseId);
+    this.loadBestLapForCourse(this.courseKey);
 
     this.isSoftwareGl = detectSoftwareWebGL();
     const renderer = new THREE.WebGLRenderer({
@@ -296,7 +380,7 @@ export class RaceEngine {
 
     this.maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
     this.textures = createProceduralTextures(this.maxAnisotropy);
-    this.track = createTrack(this.courseId, this.textures, this.isSoftwareGl);
+    this.track = createTrack(this.courseKey, this.textures, this.isSoftwareGl);
     scene.add(this.track.group);
     this.itemSystem = new TrackItemSystem(scene, this.track, this.maxAnisotropy);
 
@@ -343,20 +427,24 @@ export class RaceEngine {
     return this.track.minimapPoints;
   }
 
-  private getCourseSpec(): CourseSpec {
-    return COURSES.find((c) => c.id === this.courseId) ?? COURSES[0];
+  private getCourseSpec(): SubCourseSpec {
+    return resolveSubCourse(this.courseKey);
   }
 
-  private getBestLapKey(courseId: CourseId): string {
-    return courseId === 'orbital'
-      ? BEST_LAP_STORAGE_KEY
-      : `${BEST_LAP_STORAGE_KEY}_${courseId}`;
+  private getTotalLaps(): number {
+    return this.getCourseSpec().subcategoryId ? 2 : 3;
   }
 
-  private loadBestLapForCourse(courseId: CourseId): void {
+  private getBestLapKey(courseKey: string): string {
+    const baseKey =
+      courseKey === 'orbital' ? BEST_LAP_STORAGE_KEY : `${BEST_LAP_STORAGE_KEY}_${courseKey}`;
+    return this.gameMode === 'time_attack' ? `${baseKey}_ta` : baseKey;
+  }
+
+  private loadBestLapForCourse(courseKey: string): void {
     this.allTimeBestLapMs = null;
     try {
-      const saved = localStorage.getItem(this.getBestLapKey(courseId));
+      const saved = localStorage.getItem(this.getBestLapKey(courseKey));
       if (saved) {
         const parsed = Number(saved);
         if (Number.isFinite(parsed) && parsed > 0) this.allTimeBestLapMs = parsed;
@@ -366,12 +454,13 @@ export class RaceEngine {
     }
   }
 
-  public setCourse(courseId: CourseId): void {
-    if (this.courseId === courseId) return;
-    this.courseId = courseId;
-    this.loadBestLapForCourse(courseId);
+  public setCourse(courseKey: string): void {
+    const spec = resolveSubCourse(courseKey);
+    if (this.courseKey === spec.courseKey) return;
+    this.courseKey = spec.courseKey;
+    this.courseId = spec.baseCourseId;
+    this.loadBestLapForCourse(this.courseKey);
 
-    const spec = this.getCourseSpec();
     this.scene.background = new THREE.Color(spec.skyHex);
     this.scene.fog = new THREE.FogExp2(spec.skyHex, spec.fogDensity);
     this.hemiLight.color.setHex(spec.hemiSky);
@@ -384,12 +473,43 @@ export class RaceEngine {
     this.scene.remove(this.track.group);
     this.track.dispose();
 
-    this.track = createTrack(this.courseId, this.textures, this.isSoftwareGl);
+    this.track = createTrack(this.courseKey, this.textures, this.isSoftwareGl);
     this.scene.add(this.track.group);
     this.itemSystem = new TrackItemSystem(this.scene, this.track, this.maxAnisotropy);
+    this.itemSystem.setShowItems(this.gameMode !== 'time_attack');
 
     this.camInitialized = false;
+    this.rebuildGhosts();
     this.resetGridPositions();
+    this.emitTelemetry();
+  }
+
+  public setGameMode(mode: GameMode): void {
+    if (this.gameMode === mode) return;
+    this.gameMode = mode;
+    this.loadBestLapForCourse(this.courseKey);
+    this.itemSystem.setShowItems(this.gameMode !== 'time_attack');
+    if (this.phase === 'menu') {
+      this.buildRacers();
+      this.resetGridPositions();
+      this.emitTelemetry();
+    }
+  }
+
+  public setGhostVisibility(showBest: boolean, showLast: boolean): void {
+    this.showBestGhost = showBest;
+    this.showLastGhost = showLast;
+    const isRaceView =
+      this.phase === 'countdown' ||
+      this.phase === 'racing' ||
+      this.phase === 'paused' ||
+      this.phase === 'finishing';
+    if (this.bestGhostModel) {
+      this.bestGhostModel.root.visible = isRaceView && this.showBestGhost;
+    }
+    if (this.lastGhostModel) {
+      this.lastGhostModel.root.visible = isRaceView && this.showLastGhost;
+    }
     this.emitTelemetry();
   }
 
@@ -404,8 +524,11 @@ export class RaceEngine {
   }
 
   public setSpeedClass(cls: SpeedClass): void {
+    if (this.speedClass === cls) return;
     this.speedClass = cls;
     if (this.phase === 'menu') {
+      this.rebuildGhosts();
+      this.resetGridPositions();
       this.emitTelemetry();
     }
   }
@@ -423,6 +546,7 @@ export class RaceEngine {
   }
 
   public usePlayerSubItem(): void {
+    if (this.gameMode === 'time_attack') return;
     if (this.phase !== 'racing' || this.playerRacer.finished) return;
     this.activateSubItem(this.playerRacer);
   }
@@ -435,9 +559,10 @@ export class RaceEngine {
   public startRace(): void {
     this.audio.init();
     this.itemSystem.resetDynamicHazards();
+    this.itemSystem.setShowItems(this.gameMode !== 'time_attack');
+    this.phase = 'countdown';
     this.buildRacers();
     this.resetGridPositions();
-    this.phase = 'countdown';
     this.countdownTimer = 3.2;
     this.finishCelebrationTimer = 0;
     this.lastBeepStep = 4;
@@ -464,6 +589,23 @@ export class RaceEngine {
     this.quizFeedback = null;
     this.quizFeedbackTimer = 0;
     this.assistedLaneIndex = null;
+    this.manualGauge = 0;
+    this.prevBestGhostFlags = 0;
+    this.prevLastGhostFlags = 0;
+    this.recordSampleAccum = 0;
+    this.recordedFrames =
+      this.gameMode === 'time_attack'
+        ? [
+            packGhostFrame(
+              0,
+              this.playerRacer.s,
+              this.playerRacer.lateral,
+              this.playerRacer.yawAngle,
+              this.playerRacer.hoverLift,
+              0
+            ),
+          ]
+        : [];
 
     this.emitTelemetry();
   }
@@ -484,6 +626,7 @@ export class RaceEngine {
     this.finishCelebrationTimer = 0;
     this.audio.updateEngine(0, false, false);
     this.itemSystem.resetDynamicHazards();
+    this.itemSystem.setShowItems(this.gameMode !== 'time_attack');
     this.buildRacers();
     this.resetGridPositions();
     this.camInitialized = false;
@@ -499,6 +642,8 @@ export class RaceEngine {
     this.quizFeedback = null;
     this.quizFeedbackTimer = 0;
     this.assistedLaneIndex = null;
+    this.manualGauge = 0;
+    this.recordedFrames = [];
     this.emitTelemetry();
   }
 
@@ -621,68 +766,138 @@ export class RaceEngine {
     this.racers.push(player);
     this.playerRacer = player;
 
-    rivalConfigs.forEach((cfg, idx) => {
-      const model = createHypercarMesh(
-        cfg.body,
-        cfg.secondary,
-        cfg.accent,
-        this.textures.contactShadow,
-        castShadow,
-        cfg.chassisStyle
-      );
-      this.scene.add(model.root);
-      this.racers.push({
-        id: cfg.id,
-        name: cfg.name,
-        isPlayer: false,
-        accentHex: cfg.hex,
-        model,
-        pos: new THREE.Vector3(),
-        headingQuat: new THREE.Quaternion(),
-        yawAngle: 0,
-        speed: 0,
-        s: 0.997 - idx * 0.0015,
-        prevS: 0.997 - idx * 0.0015,
-        lateral: cfg.offset,
-        lateralVel: 0,
-        lap: 1,
-        finished: false,
-        finishTimeMs: 0,
-        lapStartMs: 0,
-        lapTimesMs: [],
-        bestLapMs: null,
-        sectorFlags: 0,
-        rollVisual: 0,
-        pitchVisual: 0,
-        hoverPhase: idx * 1.4,
-        accelSurgeTimer: 0,
-        superTurboTimer: 0,
-        glowBoostTimer: 0,
-        hoverGlideTimer: 0,
-        hoverGlideDuration: 1,
-        hoverLift: 0,
-        heldItem: null,
-        heldItemHoldTime: 0,
-        shieldTimer: 0,
-        hitSpinTimer: 0,
-        quizPenaltyTimer: 0,
-        postHitGraceTimer: 0,
-        itemPower: cfg.itemPower,
-        aiItemCooldown: 2.0 + idx * 0.8,
-        aiLastGateKey: '',
-        aiTargetOffset: cfg.offset,
-        aiBaseSpeedFactor: cfg.speedFactor,
+    if (this.gameMode !== 'time_attack') {
+      rivalConfigs.forEach((cfg, idx) => {
+        const model = createHypercarMesh(
+          cfg.body,
+          cfg.secondary,
+          cfg.accent,
+          this.textures.contactShadow,
+          castShadow,
+          cfg.chassisStyle
+        );
+        this.scene.add(model.root);
+        this.racers.push({
+          id: cfg.id,
+          name: cfg.name,
+          isPlayer: false,
+          accentHex: cfg.hex,
+          model,
+          pos: new THREE.Vector3(),
+          headingQuat: new THREE.Quaternion(),
+          yawAngle: 0,
+          speed: 0,
+          s: 0.997 - idx * 0.0015,
+          prevS: 0.997 - idx * 0.0015,
+          lateral: cfg.offset,
+          lateralVel: 0,
+          lap: 1,
+          finished: false,
+          finishTimeMs: 0,
+          lapStartMs: 0,
+          lapTimesMs: [],
+          bestLapMs: null,
+          sectorFlags: 0,
+          rollVisual: 0,
+          pitchVisual: 0,
+          hoverPhase: idx * 1.4,
+          accelSurgeTimer: 0,
+          superTurboTimer: 0,
+          glowBoostTimer: 0,
+          hoverGlideTimer: 0,
+          hoverGlideDuration: 1,
+          hoverLift: 0,
+          heldItem: null,
+          heldItemHoldTime: 0,
+          shieldTimer: 0,
+          hitSpinTimer: 0,
+          quizPenaltyTimer: 0,
+          postHitGraceTimer: 0,
+          itemPower: cfg.itemPower,
+          aiItemCooldown: 2.0 + idx * 0.8,
+          aiLastGateKey: '',
+          aiTargetOffset: cfg.offset,
+          aiBaseSpeedFactor: cfg.speedFactor,
+        });
       });
-    });
+    }
+
+    this.rebuildGhosts();
+  }
+
+  private disposeGhostModels(): void {
+    if (this.bestGhostModel) {
+      this.scene.remove(this.bestGhostModel.root);
+      this.bestGhostModel.dispose();
+      this.bestGhostModel = null;
+    }
+    if (this.lastGhostModel) {
+      this.scene.remove(this.lastGhostModel.root);
+      this.lastGhostModel.dispose();
+      this.lastGhostModel = null;
+    }
+  }
+
+  private rebuildGhosts(): void {
+    this.disposeGhostModels();
+    this.bestGhostRec = null;
+    this.lastGhostRec = null;
+    this.prevBestGhostFlags = 0;
+    this.prevLastGhostFlags = 0;
+
+    if (this.gameMode !== 'time_attack') return;
+
+    this.bestGhostRec = loadBestGhost(this.courseKey, this.speedClass);
+    this.lastGhostRec = loadLastGhost(this.courseKey, this.speedClass);
+    const isRaceView =
+      this.phase === 'countdown' ||
+      this.phase === 'racing' ||
+      this.phase === 'paused' ||
+      this.phase === 'finishing';
+
+    if (this.bestGhostRec) {
+      const spec = MACHINES.find((m) => m.id === this.bestGhostRec!.machineId) ?? MACHINES[0];
+      const model = createHypercarMesh(
+        spec.bodyColor,
+        spec.secondaryColor,
+        0xfbbf24,
+        this.textures.contactShadow,
+        false,
+        spec.chassisStyle,
+        0.38
+      );
+      model.root.visible = isRaceView && this.showBestGhost;
+      this.scene.add(model.root);
+      this.bestGhostModel = model;
+    }
+
+    if (this.lastGhostRec) {
+      const spec = MACHINES.find((m) => m.id === this.lastGhostRec!.machineId) ?? MACHINES[0];
+      const model = createHypercarMesh(
+        spec.bodyColor,
+        spec.secondaryColor,
+        0x38bdf8,
+        this.textures.contactShadow,
+        false,
+        spec.chassisStyle,
+        0.26
+      );
+      model.root.visible = isRaceView && this.showLastGhost;
+      this.scene.add(model.root);
+      this.lastGhostModel = model;
+    }
   }
 
   private resetGridPositions(): void {
-    const gridSlots = [
-      { s: 0.9925, lat: 3.2 },  // Player starts P4
-      { s: 0.997, lat: -3.2 },  // AI 1
-      { s: 0.9955, lat: 3.2 },  // AI 2
-      { s: 0.994, lat: -3.2 },  // AI 3
-    ];
+    const gridSlots =
+      this.gameMode === 'time_attack'
+        ? [{ s: 0.994, lat: 0 }]
+        : [
+            { s: 0.9925, lat: 3.2 }, // Player starts P4
+            { s: 0.997, lat: -3.2 }, // AI 1
+            { s: 0.9955, lat: 3.2 }, // AI 2
+            { s: 0.994, lat: -3.2 }, // AI 3
+          ];
 
     this.racers.forEach((r, idx) => {
       const slot = gridSlots[idx] ?? { s: 0.992, lat: 0 };
@@ -719,6 +934,8 @@ export class RaceEngine {
 
       this.syncRacerVisual(r, 0, false);
     });
+
+    this.updateGhosts(0, true);
   }
 
   private computeRoadPose(
@@ -895,6 +1112,7 @@ export class RaceEngine {
         r.hoverPhase += dt * 3.0;
         this.syncRacerVisual(r, dt, false);
       });
+      this.updateGhosts(dt, true);
       this.updateRaceCamera(dt, false);
       return;
     }
@@ -944,7 +1162,7 @@ export class RaceEngine {
       if (r.postHitGraceTimer > 0) {
         r.postHitGraceTimer = Math.max(0, r.postHitGraceTimer - dt);
       }
-      if (this.phase === 'racing' && !r.finished && r.heldItem !== null) {
+      if (this.gameMode !== 'time_attack' && this.phase === 'racing' && !r.finished && r.heldItem !== null) {
         r.heldItemHoldTime += dt;
         if (r.heldItemHoldTime >= 8.0) {
           const expiredName = SUB_ITEMS[r.heldItem].name;
@@ -971,10 +1189,30 @@ export class RaceEngine {
       );
     }
 
-    this.updateHazards(dt);
+    if (this.gameMode === 'time_attack' && this.phase === 'racing' && !this.playerRacer.finished) {
+      this.recordSampleAccum += dt;
+      if (this.recordSampleAccum >= 0.1) {
+        this.recordSampleAccum -= 0.1;
+        this.recordedFrames.push(
+          packGhostFrame(
+            this.raceElapsedMs,
+            this.playerRacer.s,
+            this.playerRacer.lateral,
+            this.playerRacer.yawAngle,
+            this.playerRacer.hoverLift,
+            this.getPlayerGhostFlags()
+          )
+        );
+      }
+    }
 
-    // Car-to-car separation (non-blocking near quiz item gates)
-    this.resolveCarCollisions();
+    this.updateGhosts(dt, false);
+
+    if (this.gameMode !== 'time_attack') {
+      this.updateHazards(dt);
+      // Car-to-car separation (non-blocking near quiz item gates)
+      this.resolveCarCollisions();
+    }
 
     // Update shadow keyLight target around player
     this.keyLight.position.set(
@@ -1005,6 +1243,114 @@ export class RaceEngine {
     }
   }
 
+  private getPlayerGhostFlags(): number {
+    const r = this.playerRacer;
+    let flags = 0;
+    if (r.accelSurgeTimer > 0) flags |= GHOST_FLAG_BOOST;
+    if (r.superTurboTimer > 0) flags |= GHOST_FLAG_SUPER_TURBO;
+    if (r.hoverGlideTimer > 0 || r.hoverLift > 0.25) flags |= GHOST_FLAG_HOVER;
+    if (r.hitSpinTimer > 0) flags |= GHOST_FLAG_HIT_SPIN;
+    if (r.glowBoostTimer > 0) flags |= GHOST_FLAG_GLOW;
+    return flags;
+  }
+
+  private updateGhosts(dt: number, atStartGrid: boolean): void {
+    const showInPhase =
+      this.gameMode === 'time_attack' &&
+      (this.phase === 'countdown' ||
+        this.phase === 'racing' ||
+        this.phase === 'paused' ||
+        this.phase === 'finishing');
+
+    const timeMs = atStartGrid ? 0 : this.raceElapsedMs;
+
+    if (this.bestGhostModel && this.bestGhostRec) {
+      sampleGhostAtTime(this.bestGhostRec, timeMs, _ghostSampleBest);
+      const visible = showInPhase && this.showBestGhost && !_ghostSampleBest.finished;
+      this.bestGhostModel.root.visible = visible;
+      if (visible) {
+        this.bestGhostPhase += (dt > 0 ? dt : 0.016) * 5.2;
+        this.syncGhostModel(
+          this.bestGhostModel,
+          _ghostSampleBest,
+          this.bestGhostPhase,
+          this.prevBestGhostFlags
+        );
+        this.prevBestGhostFlags = _ghostSampleBest.flags;
+      }
+    }
+
+    if (this.lastGhostModel && this.lastGhostRec) {
+      sampleGhostAtTime(this.lastGhostRec, timeMs, _ghostSampleLast);
+      const visible = showInPhase && this.showLastGhost && !_ghostSampleLast.finished;
+      this.lastGhostModel.root.visible = visible;
+      if (visible) {
+        this.lastGhostPhase += (dt > 0 ? dt : 0.016) * 5.2;
+        this.syncGhostModel(
+          this.lastGhostModel,
+          _ghostSampleLast,
+          this.lastGhostPhase,
+          this.prevLastGhostFlags
+        );
+        this.prevLastGhostFlags = _ghostSampleLast.flags;
+      }
+    }
+  }
+
+  private syncGhostModel(
+    model: HypercarModel,
+    sample: GhostSampleOut,
+    phase: number,
+    prevFlags: number
+  ): void {
+    this.computeRoadPose(sample.s, sample.lateral, sample.yawAngle, _ghostPos, _ghostQuat);
+    model.root.position.copy(_ghostPos);
+    model.root.quaternion.copy(_ghostQuat);
+
+    const flags = sample.flags;
+    const isBoost = (flags & GHOST_FLAG_BOOST) !== 0;
+    const isSuper = (flags & GHOST_FLAG_SUPER_TURBO) !== 0;
+    const isHover = (flags & GHOST_FLAG_HOVER) !== 0;
+    const isSpin = (flags & GHOST_FLAG_HIT_SPIN) !== 0;
+    const isGlow = (flags & GHOST_FLAG_GLOW) !== 0;
+
+    // Edge-triggered boost / damage visual effects (non-colliding, purely visual)
+    if (this.phase === 'racing') {
+      if ((isSpin && (prevFlags & GHOST_FLAG_HIT_SPIN) === 0)) {
+        this.track.sampleAtS(sample.s, _sample);
+        this.itemSystem.spawnHitBurst(_ghostPos, _sample.up, 0xef4444, 0.9);
+      } else if ((isBoost || isSuper) && (prevFlags & (GHOST_FLAG_BOOST | GHOST_FLAG_SUPER_TURBO)) === 0) {
+        this.track.sampleAtS(sample.s, _sample);
+        this.itemSystem.spawnDashRings(_ghostPos, _sample.tangent, _sample.up, isSuper ? 0xfbbf24 : 0x38bdf8, false);
+      }
+    }
+
+    const hoverBob = Math.sin(phase) * 0.04;
+    model.chassisGroup.position.y = 0.8 + hoverBob + sample.hoverLift;
+    const spinY = isSpin ? phase * 3.8 : 0;
+    model.chassisGroup.rotation.set(isBoost || isSuper ? -0.04 : -0.01, spinY, 0);
+
+    model.shadowPlane.scale.setScalar(1 + sample.hoverLift * 0.08);
+    model.shieldDome.visible = false;
+    model.glowAura.visible = isGlow;
+    if (isGlow) {
+      model.glowAura.rotation.y += 0.08;
+    }
+    model.hoverHalo.visible = isHover || sample.hoverLift > 0.2;
+    model.spinSparkRing.visible = isSpin;
+    if (isSpin) {
+      model.spinSparkRing.rotation.y -= 0.22;
+    }
+    model.boostAura.visible = isBoost || isSuper;
+    const boosting = isBoost || isSuper || isGlow;
+    const flameScale = boosting ? 2.1 : 0.9;
+    const flameRadius = boosting ? 1.35 : 0.85;
+    for (const flame of model.thrusterFlames) {
+      flame.scale.set(flameRadius, flameRadius, flameScale);
+    }
+    model.boostGlowMaterial.emissiveIntensity = boosting ? 3.2 : 1.5;
+  }
+
   private updatePlayerRacer(
     r: RacerState,
     dt: number,
@@ -1022,8 +1368,24 @@ export class RaceEngine {
     const accelerating = r.accelSurgeTimer > 0 || superTurbo || glowActive;
 
     const baseMaxSpeed = (spec.maxSpeedKmh / 3.6) * classMultiplier;
-    const hitPenalty = r.hitSpinTimer > 0 ? 0.40 : r.quizPenaltyTimer > 0 ? 0.76 : 1.0;
-    const penaltyAccelMult = r.hitSpinTimer > 0 ? 0.38 : r.quizPenaltyTimer > 0 ? 0.65 : 1.0;
+    const quizPenaltySpec = HIDDEN_WRONG_PENALTY[this.machineId] ?? HIDDEN_WRONG_PENALTY.phantom;
+    const isQuizPenaltyActive = r.quizPenaltyTimer > 0;
+    const hitPenalty =
+      r.hitSpinTimer > 0
+        ? isQuizPenaltyActive
+          ? quizPenaltySpec.spinMaxMult
+          : 0.40
+        : isQuizPenaltyActive
+          ? quizPenaltySpec.recoveryMaxMult
+          : 1.0;
+    const penaltyAccelMult =
+      r.hitSpinTimer > 0
+        ? isQuizPenaltyActive
+          ? quizPenaltySpec.spinMaxMult * 0.95
+          : 0.38
+        : isQuizPenaltyActive
+          ? quizPenaltySpec.recoveryMaxMult * 0.85
+          : 1.0;
     const shieldBonus = r.shieldTimer > 0 ? 1.04 + 0.04 * r.itemPower : 1.0;
     const glowBonus = glowActive ? (r.itemPower >= 1.3 ? 1.24 : 1.16) : 1.0;
     const hoverBonus = hoverActive ? (r.itemPower >= 1.3 ? 1.16 : 1.10) : 1.0;
@@ -1043,6 +1405,13 @@ export class RaceEngine {
     // Manual steering clears lane-assist override immediately
     if (Math.abs(steer) >= 0.08) {
       this.assistedLaneIndex = null;
+    }
+
+    // Unnamed Manual Steering Gauge: rises fully only while holding mouse left-click or touch;
+    // idle or keyboard steering charges at 1/20 of the normal pace; pauses during auto lane-assist.
+    if (this.assistedLaneIndex === null) {
+      const chargeRate = this.touchInput.pointerHeld ? 0.115 : 0.115 / 20;
+      this.manualGauge = Math.min(1, this.manualGauge + chargeRate * dt);
     }
 
     // Steering physics relative to track tangent (smooth lateral control so Lanes 2 & 3 hold steady)
@@ -1116,8 +1485,9 @@ export class RaceEngine {
     const aiProgress = this.getTotalProgress(r);
     const gap = playerProgress - aiProgress;
     // Behave identically to normal laps until the player passes the final lap's first item gate
+    const totalLaps = this.getTotalLaps();
     const isFinalStretch =
-      this.playerRacer.lap >= TOTAL_LAPS &&
+      this.playerRacer.lap >= totalLaps &&
       this.playerRacer.s >= QUIZ_ROW_S[0] &&
       this.playerRacer.s < 0.995;
 
@@ -1294,7 +1664,7 @@ export class RaceEngine {
   }
 
   private updateQuizSchedule(): void {
-    const totalRaceGates = TOTAL_LAPS * this.itemSystem.rows.length;
+    const totalRaceGates = this.getTotalLaps() * this.itemSystem.rows.length;
     if (this.playerRacer.finished || this.quizGatesCleared >= totalRaceGates) {
       if (this.activeQuiz) {
         this.activeQuiz = null;
@@ -1310,8 +1680,13 @@ export class RaceEngine {
 
     // ~20 seconds before the item line: show the question at top of screen
     if (!this.activeQuiz && etaSeconds <= 20.5) {
-      const catId = this.getCourseSpec().categoryId;
-      this.activeQuiz = generateQuizChallenge(this.usedTermIds, catId, this.speedClass);
+      const courseSpec = this.getCourseSpec();
+      this.activeQuiz = generateQuizChallenge(
+        this.usedTermIds,
+        courseSpec.categoryId,
+        this.speedClass,
+        courseSpec.subcategoryId
+      );
       this.usedTermIds.add(this.activeQuiz.targetTerm.term.id);
       this.quizLanesRevealed = false;
       this.itemSystem.setRowQuizDisplay(this.nextQuizRowIndex, this.activeQuiz.choices, false);
@@ -1366,7 +1741,7 @@ export class RaceEngine {
           const gateKey = `${r.lap}-${row.rowIndex}`;
           if (r.aiLastGateKey !== gateKey) {
             r.aiLastGateKey = gateKey;
-            const isFinalLapLate = r.lap >= TOTAL_LAPS && row.rowIndex >= 0;
+            const isFinalLapLate = r.lap >= this.getTotalLaps() && row.rowIndex >= 0;
             const pool: SubItemType[] = isFinalLapLate
               ? ['boost', 'glow_boost', 'hover_glide', 'shield', 'spread_missile']
               : ['glow_boost', 'hover_glide', 'spread_missile', 'laser', 'leader_bomb', 'mine', 'emp'];
@@ -1394,9 +1769,15 @@ export class RaceEngine {
     this.itemSystem.setRowVisible(row.rowIndex, false, true);
     this.itemSystem.setRowQuizDisplay(row.rowIndex, null, false);
 
+    const activeSpec = this.getCourseSpec();
     const quiz =
       this.activeQuiz ??
-      generateQuizChallenge(this.usedTermIds, this.getCourseSpec().categoryId, this.speedClass);
+      generateQuizChallenge(
+        this.usedTermIds,
+        activeSpec.categoryId,
+        this.speedClass,
+        activeSpec.subcategoryId
+      );
     const choice = quiz.choices[laneIdx];
     const correctChoice = quiz.choices[quiz.correctLaneIndex];
     this.quizAttempts += 1;
@@ -1424,62 +1805,100 @@ export class RaceEngine {
       });
       this.onCollectionChange?.();
 
-      // Correct answer: clear any lingering quiz drag, grant stronger Turbo boost + streak bonus AND the lane's item
+      // Correct answer: clear any lingering quiz drag, grant stronger Turbo boost + streak bonus (and Manual MAX boost if full)
       r.quizPenaltyTimer = 0;
+      const isTimeAttack = this.gameMode === 'time_attack';
+      const manualMaxed = this.manualGauge >= 0.999;
+      if (manualMaxed) {
+        this.manualGauge = 0;
+      }
       const classMultiplier = this.speedClass === 'hard' ? 1.10 : 1.0;
       const baseMax = (this.getSelectedSpec().maxSpeedKmh / 3.6) * classMultiplier;
       const streakExtraSec = Math.min(1.4, Math.max(0, (this.quizStreak - 1) * 0.35));
-      r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 3.2 * r.itemPower + streakExtraSec);
+      const boostLaneActive = !isTimeAttack && choice.itemKind === 'boost';
+
+      r.accelSurgeTimer = Math.max(
+        r.accelSurgeTimer,
+        (manualMaxed ? 4.1 : 3.2) * r.itemPower + streakExtraSec
+      );
       r.speed = Math.max(
         r.speed,
-        baseMax * (choice.itemKind === 'boost' ? 1.42 : this.quizStreak >= 3 ? 1.32 : 1.24)
+        baseMax *
+          (boostLaneActive
+            ? manualMaxed
+              ? 1.48
+              : 1.42
+            : manualMaxed
+              ? 1.38
+              : this.quizStreak >= 3
+                ? 1.32
+                : 1.24)
       );
 
-      if (choice.itemKind === 'boost' || this.quizStreak >= 3) {
-        const streakTurbo = this.quizStreak >= 3 ? 1.5 + Math.min(1.2, (this.quizStreak - 3) * 0.4) : 0;
+      if (boostLaneActive || this.quizStreak >= 3 || manualMaxed) {
+        const streakTurbo =
+          this.quizStreak >= 3 ? 1.5 + Math.min(1.2, (this.quizStreak - 3) * 0.4) : 0;
+        const manualTurbo = manualMaxed ? 2.2 : 0;
         r.superTurboTimer = Math.max(
           r.superTurboTimer,
-          choice.itemKind === 'boost' ? 3.6 * r.itemPower : streakTurbo
+          boostLaneActive ? Math.max(3.6 * r.itemPower, manualTurbo) : Math.max(streakTurbo, manualTurbo)
         );
-        r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 4.0 * r.itemPower);
+        r.accelSurgeTimer = Math.max(r.accelSurgeTimer, (manualMaxed ? 4.4 : 4.0) * r.itemPower);
       }
 
-      if (r.heldItem) {
-        this.activateSubItem(r);
+      if (!isTimeAttack) {
+        if (r.heldItem) {
+          this.activateSubItem(r);
+        }
+        r.heldItem = choice.itemKind;
+        r.heldItemHoldTime = 0;
+      } else {
+        r.heldItem = null;
+        r.heldItemHoldTime = 0;
       }
-      r.heldItem = choice.itemKind;
-      r.heldItemHoldTime = 0;
 
       this.audio.playItemPickup();
       this.audio.playBoostPad();
       this.track.sampleAtS(r.s, _sample);
+      const bigBoost = boostLaneActive || this.quizStreak >= 3 || manualMaxed;
       this.itemSystem.spawnDashRings(
         r.pos,
         _sample.tangent,
         _sample.up,
-        choice.itemKind === 'boost' || this.quizStreak >= 3 ? 0xf59e0b : 0x22d3ee,
-        choice.itemKind === 'boost' || this.quizStreak >= 3
+        bigBoost ? 0xf59e0b : 0x22d3ee,
+        bigBoost
       );
 
       const streakTag = this.quizStreak >= 2 ? ` · ${this.quizStreak}連続正解!` : '';
-      if (choice.itemKind === 'boost') {
+      if (isTimeAttack) {
         this.quizFeedback = {
           correct: true,
           termName: choice.term.name,
-          message: `正解！「${choice.term.name}」獲得 · HYPER TURBO発動！${streakTag}`,
+          message: `${manualMaxed ? 'マニュアル最大ブースト発動！' : 'ターボ加速！'}${streakTag}`,
+        };
+        this.pushEventNotice(
+          `正解！「${choice.term.name}」${manualMaxed ? ' + マニュアル最大ブースト!' : ''}${streakTag}`
+        );
+      } else if (choice.itemKind === 'boost') {
+        this.quizFeedback = {
+          correct: true,
+          termName: choice.term.name,
+          message: `HYPER TURBO発動！${streakTag}`,
         };
         this.pushEventNotice(`正解！「${choice.term.name}」パーツ獲得 + HYPER TURBO!${streakTag}`);
       } else {
         this.quizFeedback = {
           correct: true,
           termName: choice.term.name,
-          message: `正解！ターボ加速 + ${SUB_ITEMS[choice.itemKind].name}獲得${streakTag}`,
+          message: `${manualMaxed ? 'マニュアル強化ターボ' : 'ターボ加速'} + ${SUB_ITEMS[choice.itemKind].name}獲得${streakTag}`,
         };
-        this.pushEventNotice(`正解！「${choice.term.name}」パーツ獲得 + ${SUB_ITEMS[choice.itemKind].name}${streakTag}`);
+        this.pushEventNotice(
+          `正解！「${choice.term.name}」パーツ獲得 + ${SUB_ITEMS[choice.itemKind].name}${streakTag}`
+        );
       }
-      this.quizFeedbackTimer = 3.2;
+      this.quizFeedbackTimer = 8.0;
     } else {
-      // Wrong answer: reset streak, record review entry, stronger spin out + lingering engine stall
+      // Wrong answer: reset streak, record review entry, hidden machine-specific spin penalty
       this.quizStreak = 0;
       this.missedQuestions.push({
         termId: quiz.targetTerm.term.id,
@@ -1491,9 +1910,10 @@ export class RaceEngine {
         rarity: quiz.targetTerm.term.rarity,
       });
 
-      r.hitSpinTimer = 2.2;
-      r.quizPenaltyTimer = 4.5;
-      r.speed *= 0.28;
+      const penalty = HIDDEN_WRONG_PENALTY[this.machineId] ?? HIDDEN_WRONG_PENALTY.phantom;
+      r.hitSpinTimer = penalty.spinDur;
+      r.quizPenaltyTimer = penalty.penaltyDur;
+      r.speed *= penalty.speedMult;
       r.accelSurgeTimer = 0;
       r.superTurboTimer = 0;
       r.glowBoostTimer = 0;
@@ -1506,7 +1926,7 @@ export class RaceEngine {
         termName: correctChoice.term.name,
         message: `誤答スピン！ 正解は「${correctChoice.term.name}」`,
       };
-      this.triggerHitAlert('誤答スピン', '#EF4444', 2.2);
+      this.triggerHitAlert('誤答スピン', '#EF4444', penalty.spinDur);
       this.pushEventNotice(`不正解スピン… 正解: ${correctChoice.term.name}`);
       this.quizFeedbackTimer = 18.0;
     }
@@ -1901,13 +2321,14 @@ export class RaceEngine {
         this.allTimeBestLapMs = lapTime;
         this.isNewRecord = true;
         try {
-          localStorage.setItem(this.getBestLapKey(this.courseId), String(Math.round(lapTime)));
+          localStorage.setItem(this.getBestLapKey(this.courseKey), String(Math.round(lapTime)));
         } catch {
           // Ignore storage error
         }
       }
 
-      if (r.lap >= TOTAL_LAPS) {
+      const totalLaps = this.getTotalLaps();
+      if (r.lap >= totalLaps) {
         r.finished = true;
         r.finishTimeMs = this.raceElapsedMs;
         if (r.isPlayer) {
@@ -1923,17 +2344,48 @@ export class RaceEngine {
           this.itemSystem.spawnShockwave(r.pos, _sample.up, 0xfbbf24, 18, 0.7);
 
           const playerRank = this.getRacerRank(r);
-          const { placedRank } = recordTotalTimeRanking({
-            courseId: this.courseId,
-            speedClass: this.speedClass,
-            totalTimeMs: r.finishTimeMs,
-            lapTimesMs: [...r.lapTimesMs],
-            bestLapMs: r.bestLapMs,
-            machineId: this.machineId,
-            machineName: this.getSelectedSpec().name,
-            rankFinished: playerRank,
-          });
-          this.rankingPlacement = placedRank;
+          const isSubcategory = this.getCourseSpec().subcategoryId !== null;
+
+          if (this.gameMode === 'time_attack') {
+            this.recordedFrames.push(
+              packGhostFrame(
+                r.finishTimeMs,
+                r.s,
+                r.lateral,
+                r.yawAngle,
+                r.hoverLift,
+                this.getPlayerGhostFlags()
+              )
+            );
+            const selectedSpec = this.getSelectedSpec();
+            saveTimeAttackGhosts({
+              courseKey: this.courseKey,
+              speedClass: this.speedClass,
+              machineId: this.machineId,
+              machineName: selectedSpec.name,
+              totalTimeMs: r.finishTimeMs,
+              createdAt: Date.now(),
+              frames: this.recordedFrames,
+            });
+          }
+
+          if (!isSubcategory) {
+            const { placedRank } = recordTotalTimeRanking({
+              courseId: this.courseKey,
+              speedClass: this.speedClass,
+              mode: this.gameMode,
+              totalTimeMs: r.finishTimeMs,
+              lapTimesMs: [...r.lapTimesMs],
+              bestLapMs: r.bestLapMs,
+              machineId: this.machineId,
+              machineName: this.getSelectedSpec().name,
+              rankFinished: playerRank,
+            });
+            this.rankingPlacement = placedRank;
+          } else {
+            this.rankingPlacement = null;
+          }
+
           this.audio.playLapComplete(true);
           this.emitTelemetry(true);
         }
@@ -2172,8 +2624,9 @@ export class RaceEngine {
   }
 
   private getTotalProgress(r: RacerState): number {
+    const totalLaps = this.getTotalLaps();
     if (r.finished) {
-      return TOTAL_LAPS + 10 - r.finishTimeMs * 0.00001;
+      return totalLaps + 10 - r.finishTimeMs * 0.00001;
     }
     // Note: on grid before crossing line, s is ~0.985 with sectorFlags === 0
     const effectiveS = r.lap === 1 && r.sectorFlags === 0 && r.s > 0.8 ? r.s - 1.0 : r.s;
@@ -2181,16 +2634,17 @@ export class RaceEngine {
   }
 
   private emitTelemetry(accelerating = false): void {
+    const totalLaps = this.getTotalLaps();
     const sorted = [...this.racers].sort((a, b) => this.getTotalProgress(b) - this.getTotalProgress(a));
     const standings: RacerStanding[] = sorted.map((r, i) => ({
       id: r.id,
       name: r.name,
       isPlayer: r.isPlayer,
       rank: i + 1,
-      lap: Math.min(r.lap, TOTAL_LAPS),
+      lap: Math.min(r.lap, totalLaps),
       progressNorm: r.finished
         ? 1
-        : THREE.MathUtils.clamp(this.getTotalProgress(r) / TOTAL_LAPS, 0, 0.999),
+        : THREE.MathUtils.clamp(this.getTotalProgress(r) / totalLaps, 0, 0.999),
       totalTimeMs: r.finished ? r.finishTimeMs : this.raceElapsedMs,
       bestLapMs: r.bestLapMs,
       accentHex: r.accentHex,
@@ -2209,22 +2663,53 @@ export class RaceEngine {
       };
     });
 
-    let incomingThreat: IncomingThreatType = null;
-    if (this.itemSystem.bombStrikes.some((b) => !b.detonated && b.targetId === this.playerRacer.id)) {
-      incomingThreat = 'satellite';
-    } else if (this.itemSystem.missiles.some((m) => m.targetId === this.playerRacer.id)) {
-      incomingThreat = 'missile';
-    } else {
-      const laserApproaching = this.itemSystem.lasers.some((l) => {
-        if (l.ownerId === this.playerRacer.id) return false;
-        let ds = this.playerRacer.s - l.s;
-        if (ds < 0) ds += 1;
-        return (
-          ds * this.track.totalLength < 250 &&
-          Math.abs(l.lateral - this.playerRacer.lateral) < l.beamWidth + 3.5
+    if (this.gameMode === 'time_attack' && (this.phase === 'racing' || this.phase === 'finishing')) {
+      if (this.bestGhostModel && this.bestGhostModel.root.visible) {
+        const gm = this.track.worldToMinimap(
+          this.bestGhostModel.root.position.x,
+          this.bestGhostModel.root.position.z
         );
-      });
-      if (laserApproaching) incomingThreat = 'laser';
+        markers.push({
+          id: 'ghost-best',
+          x: gm.x,
+          y: gm.y,
+          isPlayer: false,
+          color: '#FBBF24',
+        });
+      }
+      if (this.lastGhostModel && this.lastGhostModel.root.visible) {
+        const gm = this.track.worldToMinimap(
+          this.lastGhostModel.root.position.x,
+          this.lastGhostModel.root.position.z
+        );
+        markers.push({
+          id: 'ghost-last',
+          x: gm.x,
+          y: gm.y,
+          isPlayer: false,
+          color: '#38BDF8',
+        });
+      }
+    }
+
+    let incomingThreat: IncomingThreatType = null;
+    if (this.gameMode !== 'time_attack') {
+      if (this.itemSystem.bombStrikes.some((b) => !b.detonated && b.targetId === this.playerRacer.id)) {
+        incomingThreat = 'satellite';
+      } else if (this.itemSystem.missiles.some((m) => m.targetId === this.playerRacer.id)) {
+        incomingThreat = 'missile';
+      } else {
+        const laserApproaching = this.itemSystem.lasers.some((l) => {
+          if (l.ownerId === this.playerRacer.id) return false;
+          let ds = this.playerRacer.s - l.s;
+          if (ds < 0) ds += 1;
+          return (
+            ds * this.track.totalLength < 250 &&
+            Math.abs(l.lateral - this.playerRacer.lateral) < l.beamWidth + 3.5
+          );
+        });
+        if (laserApproaching) incomingThreat = 'laser';
+      }
     }
 
     const hitAlert: HitAlertTelemetry | null =
@@ -2256,17 +2741,23 @@ export class RaceEngine {
 
     this.onTelemetry({
       phase: this.phase,
+      gameMode: this.gameMode,
       courseId: this.courseId,
+      courseKey: this.courseKey,
+      subcategoryId: this.getCourseSpec().subcategoryId,
       speedClass: this.speedClass,
       machineId: this.machineId,
       machineName: this.getSelectedSpec().name,
       countdownValue: Math.max(0, Math.ceil(this.countdownTimer)),
       speedKmh: Math.round(Math.abs(this.playerRacer.speed) * 3.6),
       isAccelerating: accelerating,
+      manualGauge: this.manualGauge,
+      hasBestGhost: Boolean(this.bestGhostRec),
+      hasLastGhost: Boolean(this.lastGhostRec),
       rank: playerRank,
       totalRacers: this.racers.length,
-      lap: Math.min(this.playerRacer.lap, TOTAL_LAPS),
-      totalLaps: TOTAL_LAPS,
+      lap: Math.min(this.playerRacer.lap, totalLaps),
+      totalLaps,
       currentLapMs: Math.max(0, this.raceElapsedMs - this.playerRacer.lapStartMs),
       lapTimesMs: [...this.playerRacer.lapTimesMs],
       bestLapMs: this.playerRacer.bestLapMs,
@@ -2277,10 +2768,11 @@ export class RaceEngine {
       markers,
       standings,
       wrongWay: false,
-      heldItem: this.playerRacer.heldItem,
-      heldItemRemainingSec: this.playerRacer.heldItem
-        ? Math.max(0, 8.0 - this.playerRacer.heldItemHoldTime)
-        : 0,
+      heldItem: this.gameMode === 'time_attack' ? null : this.playerRacer.heldItem,
+      heldItemRemainingSec:
+        this.gameMode !== 'time_attack' && this.playerRacer.heldItem
+          ? Math.max(0, 8.0 - this.playerRacer.heldItemHoldTime)
+          : 0,
       shieldActive: this.playerRacer.shieldTimer > 0,
       glowActive: this.playerRacer.glowBoostTimer > 0,
       hoverActive: this.playerRacer.hoverGlideTimer > 0,
@@ -2314,6 +2806,7 @@ export class RaceEngine {
     for (const r of this.racers) {
       r.model.dispose();
     }
+    this.disposeGhostModels();
     this.itemSystem.dispose();
     this.track.dispose();
     this.textures.dispose();

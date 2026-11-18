@@ -37,6 +37,8 @@ interface RaceHudProps {
   muted: boolean;
   dockCollapsed: boolean;
   touchDrag: TouchDragIndicator;
+  showBestGhost: boolean;
+  showLastGhost: boolean;
   onToggleDock: () => void;
   onToggleMute: () => void;
   onTogglePause: () => void;
@@ -75,6 +77,8 @@ export function RaceHud({
   muted,
   dockCollapsed,
   touchDrag,
+  showBestGhost,
+  showLastGhost,
   onToggleDock,
   onToggleMute,
   onTogglePause,
@@ -94,11 +98,14 @@ export function RaceHud({
 
   const isActiveRace = telemetry.phase === 'racing' || telemetry.phase === 'countdown';
   const isFinishing = telemetry.phase === 'finishing';
+  const isTimeAttack = telemetry.gameMode === 'time_attack';
   const stopProp = (e: React.PointerEvent) => e.stopPropagation();
-  const heldMeta = telemetry.heldItem ? SUB_ITEMS[telemetry.heldItem] : null;
+  const heldMeta = !isTimeAttack && telemetry.heldItem ? SUB_ITEMS[telemetry.heldItem] : null;
   const activeQuiz = telemetry.activeQuiz;
   const quizFeedback = telemetry.quizFeedback;
   const hitAlert = telemetry.hitAlert;
+  const manualGaugeRatio = Math.max(0, Math.min(1, telemetry.manualGauge));
+  const manualGaugeFull = manualGaugeRatio >= 0.999;
 
   return (
     <div className="pointer-events-none fixed inset-0 z-10 flex flex-col justify-between p-3 sm:p-5">
@@ -138,7 +145,7 @@ export function RaceHud({
         </div>
       )}
 
-      {/* Top Row: Left Telemetry + Item Slot | Top-Right Minimap */}
+      {/* Top Row: Left Telemetry + Item Slot (or Ghost Legend in TA) | Top-Right Minimap */}
       <div className="flex items-start justify-between gap-2.5 sm:gap-4">
         {/* Top-Left Telemetry & Held Item Slot */}
         <div className="flex flex-wrap sm:flex-col items-start gap-2 shrink-0">
@@ -146,13 +153,21 @@ export function RaceHud({
             onPointerDown={stopProp}
             className="pointer-events-auto flex items-center gap-3 rounded-xl border border-white/10 bg-[#070b14]/88 px-3.5 py-2 text-slate-100 shadow-lg"
           >
-            <div className="flex items-baseline gap-1 pr-2.5 border-r border-white/10">
-              <span className="text-[10px] font-medium tracking-wider text-slate-400">POS</span>
-              <span className="font-display text-xl sm:text-2xl font-bold text-cyan-400 font-mono-num">
-                {telemetry.rank}
-              </span>
-              <span className="text-[11px] text-slate-400 font-mono-num">/{telemetry.totalRacers}</span>
-            </div>
+            {isTimeAttack ? (
+              <div className="flex items-baseline gap-1.5 pr-2.5 border-r border-white/10">
+                <span className="font-display text-xs sm:text-sm font-bold tracking-wider text-amber-400">
+                  TA
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-baseline gap-1 pr-2.5 border-r border-white/10">
+                <span className="text-[10px] font-medium tracking-wider text-slate-400">POS</span>
+                <span className="font-display text-xl sm:text-2xl font-bold text-cyan-400 font-mono-num">
+                  {telemetry.rank}
+                </span>
+                <span className="text-[11px] text-slate-400 font-mono-num">/{telemetry.totalRacers}</span>
+              </div>
+            )}
 
             <div className="flex items-baseline gap-1 sm:pr-2.5 sm:border-r sm:border-white/10">
               <span className="text-[10px] font-medium tracking-wider text-slate-400">LAP</span>
@@ -166,7 +181,7 @@ export function RaceHud({
               <div className="flex items-center justify-between gap-2.5">
                 <span className="text-slate-400">TIME</span>
                 <span className="font-mono-num font-semibold text-white">
-                  {formatRaceTime(telemetry.currentLapMs)}
+                  {formatRaceTime(isTimeAttack ? telemetry.totalRaceMs : telemetry.currentLapMs)}
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2.5">
@@ -178,60 +193,82 @@ export function RaceHud({
             </div>
           </div>
 
-          {/* Held Item Button */}
-          <button
-            type="button"
-            onPointerDown={stopProp}
-            onClick={onUseSubItem}
-            disabled={!heldMeta}
-            className={`pointer-events-auto relative overflow-hidden flex items-center gap-2.5 rounded-xl border px-3 py-1.5 sm:py-2 text-left shadow-lg transition-transform ${
-              heldMeta
-                ? 'bg-[#081020]/95 hover:scale-[1.03] active:scale-95 cursor-pointer'
-                : 'border-white/10 bg-[#070b14]/82 opacity-80 cursor-default'
-            }`}
-            style={
-              heldMeta
-                ? {
-                    borderColor: heldMeta.accentHex,
-                    boxShadow: `0 0 18px ${heldMeta.accentHex}33`,
-                  }
-                : undefined
-            }
-            title="アイテムを使用 (タップ / クリック / ↑ / ↓ / E / Space / 上下フリック)"
-          >
-            <div
-              className="flex h-7 w-7 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-lg border bg-slate-950/90"
-              style={{ borderColor: heldMeta ? `${heldMeta.accentHex}66` : 'rgba(255,255,255,0.1)' }}
-            >
-              {heldMeta ? (
-                <SubItemIcon type={heldMeta.type} className="h-4 w-4 sm:h-4.5 sm:w-4.5" />
-              ) : (
-                <span className="text-xs font-medium text-slate-500">—</span>
-              )}
-            </div>
-            <div className="flex flex-col leading-tight">
-              <span className="font-mono-num text-[10px] font-semibold tracking-wider text-slate-400 whitespace-nowrap">
-                {heldMeta
-                  ? `ITEM · ${Math.max(1, Math.ceil(telemetry.heldItemRemainingSec))}s`
-                  : telemetry.shieldActive
-                    ? 'SHIELD ACTIVE'
-                    : 'ITEM SLOT'}
-              </span>
-              <span className="font-display text-xs sm:text-sm font-bold text-white whitespace-nowrap">
-                {heldMeta ? heldMeta.name : telemetry.shieldActive ? 'Aegis Shield' : 'No Item'}
-              </span>
-            </div>
-            {heldMeta && (
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute bottom-0 left-0 h-0.5 transition-all duration-100"
-                style={{
-                  width: `${Math.max(0, Math.min(100, (telemetry.heldItemRemainingSec / 8) * 100))}%`,
-                  backgroundColor: heldMeta.accentHex,
-                }}
-              />
+          {/* Time Attack Ghost Legend (when any ghost is active) */}
+          {isTimeAttack &&
+            ((telemetry.hasBestGhost && showBestGhost) ||
+              (telemetry.hasLastGhost && showLastGhost)) && (
+              <div className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-[#070b14]/84 px-2.5 py-1 text-[10px] font-mono-num text-slate-300">
+                {telemetry.hasBestGhost && showBestGhost && (
+                  <span className="flex items-center gap-1">
+                    <span className="h-2 w-2 rounded-full bg-amber-400" />
+                    <span>BEST</span>
+                  </span>
+                )}
+                {telemetry.hasLastGhost && showLastGhost && (
+                  <span className="flex items-center gap-1">
+                    <span className="h-2 w-2 rounded-full bg-sky-400" />
+                    <span>LAST</span>
+                  </span>
+                )}
+              </div>
             )}
-          </button>
+
+          {/* Held Item Button (Hidden in Time Attack) */}
+          {!isTimeAttack && (
+            <button
+              type="button"
+              onPointerDown={stopProp}
+              onClick={onUseSubItem}
+              disabled={!heldMeta}
+              className={`pointer-events-auto relative overflow-hidden flex items-center gap-2.5 rounded-xl border px-3 py-1.5 sm:py-2 text-left shadow-lg transition-transform ${
+                heldMeta
+                  ? 'bg-[#081020]/95 hover:scale-[1.03] active:scale-95 cursor-pointer'
+                  : 'border-white/10 bg-[#070b14]/82 opacity-80 cursor-default'
+              }`}
+              style={
+                heldMeta
+                  ? {
+                      borderColor: heldMeta.accentHex,
+                      boxShadow: `0 0 18px ${heldMeta.accentHex}33`,
+                    }
+                  : undefined
+              }
+              title="アイテムを使用 (タップ / クリック / ↑ / ↓ / E / Space / 上下フリック)"
+            >
+              <div
+                className="flex h-7 w-7 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-lg border bg-slate-950/90"
+                style={{ borderColor: heldMeta ? `${heldMeta.accentHex}66` : 'rgba(255,255,255,0.1)' }}
+              >
+                {heldMeta ? (
+                  <SubItemIcon type={heldMeta.type} className="h-4 w-4 sm:h-4.5 sm:w-4.5" />
+                ) : (
+                  <span className="text-xs font-medium text-slate-500">—</span>
+                )}
+              </div>
+              <div className="flex flex-col leading-tight">
+                <span className="font-mono-num text-[10px] font-semibold tracking-wider text-slate-400 whitespace-nowrap">
+                  {heldMeta
+                    ? `ITEM · ${Math.max(1, Math.ceil(telemetry.heldItemRemainingSec))}s`
+                    : telemetry.shieldActive
+                      ? 'SHIELD ACTIVE'
+                      : 'ITEM SLOT'}
+                </span>
+                <span className="font-display text-xs sm:text-sm font-bold text-white whitespace-nowrap">
+                  {heldMeta ? heldMeta.name : telemetry.shieldActive ? 'Aegis Shield' : 'No Item'}
+                </span>
+              </div>
+              {heldMeta && (
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute bottom-0 left-0 h-0.5 transition-all duration-100"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, (telemetry.heldItemRemainingSec / 8) * 100))}%`,
+                    backgroundColor: heldMeta.accentHex,
+                  }}
+                />
+              )}
+            </button>
+          )}
         </div>
 
         {/* Top-Right SVG Circuit Minimap */}
@@ -275,72 +312,79 @@ export function RaceHud({
       </div>
 
       {/* Horizontally Dead-Center & Upper-Center Quiz / Feedback Overlay */}
-      <div className="pointer-events-none fixed left-1/2 top-18 sm:top-[16%] z-20 flex w-[min(94vw,42rem)] -translate-x-1/2 flex-col items-center gap-2">
+      <div className="pointer-events-none fixed left-1/2 top-16 sm:top-[13%] z-20 flex w-[min(94vw,42rem)] -translate-x-1/2 flex-col items-center gap-2">
         {activeQuiz && (
-          <div className="w-full rounded-2xl border border-cyan-400/45 bg-[#070b14]/92 px-4 py-3 shadow-2xl">
-            <div className="flex items-center justify-between gap-3 text-[11px] font-mono-num">
-              <span className="font-semibold tracking-wider text-cyan-400">
-                QUIZ GATE · あと {Math.max(1, Math.ceil(activeQuiz.etaSeconds))}秒
-              </span>
-              <span className="text-slate-400">
-                正答 {telemetry.quizCorrectCount}
-                {telemetry.quizStreak >= 2 && (
-                  <span className="text-amber-300 font-bold"> · {telemetry.quizStreak}連続</span>
-                )}
-                {' · '}獲得パーツ {telemetry.earnedCards.length}個
+          <>
+            {/* Centered Circular Frame with Large Countdown Number Only */}
+            <div className="flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full border-2 border-cyan-400/80 bg-[#050914]/94 shadow-[0_0_24px_rgba(6,182,212,0.42)]">
+              <span className="font-mono-num text-2xl sm:text-3xl font-bold leading-none text-white">
+                {Math.max(1, Math.ceil(activeQuiz.etaSeconds))}
               </span>
             </div>
 
-            <p className="mt-1.5 text-center text-sm sm:text-base font-bold leading-snug text-white">
-              {activeQuiz.questionText}
-            </p>
-
-            {activeQuiz.showLanes ? (
-              <div className="mt-2.5 grid grid-cols-4 gap-1.5 sm:gap-2">
-                {activeQuiz.lanes.map((lane) => {
-                  const isPlayerLane = activeQuiz.playerLaneIndex === lane.laneIndex;
-                  const itemMeta = SUB_ITEMS[lane.itemKind];
-                  return (
-                    <button
-                      key={lane.laneIndex}
-                      type="button"
-                      onPointerDown={stopProp}
-                      onClick={() => onSelectQuizLane(lane.laneIndex)}
-                      className={`pointer-events-auto flex flex-col justify-between rounded-lg border px-2 py-2 text-left transition-colors cursor-pointer ${
-                        isPlayerLane
-                          ? 'border-cyan-300 bg-cyan-500/24 ring-1 ring-cyan-300/60'
-                          : 'border-white/15 bg-slate-900/85 hover:border-white/35'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-1 text-[10px] font-mono-num">
-                        <span className={isPlayerLane ? 'font-bold text-cyan-200' : 'text-slate-400'}>
-                          L{lane.laneIndex + 1}
-                        </span>
-                        <span className="flex items-center gap-0.5 font-bold" style={{ color: itemMeta.accentHex }}>
-                          <SubItemIcon type={lane.itemKind} className="h-3 w-3" />
-                          <span className="hidden sm:inline">{itemMeta.shortLabel}</span>
-                        </span>
-                      </div>
-                      <div className="mt-1 text-center text-[11px] sm:text-xs font-bold leading-tight text-white line-clamp-2">
-                        {lane.termName}
-                      </div>
-                    </button>
-                  );
-                })}
+            <div className="w-full rounded-2xl border border-cyan-400/45 bg-[#070b14]/92 px-4 py-3 shadow-2xl">
+              <div className="flex items-center justify-between gap-3 text-[11px] font-mono-num">
+                <span className="font-semibold tracking-wider text-cyan-400">
+                  QUIZ GATE
+                </span>
+                <span className="text-slate-400">
+                  正答 {telemetry.quizCorrectCount}
+                  {telemetry.quizStreak >= 2 && (
+                    <span className="text-amber-300 font-bold"> · {telemetry.quizStreak}連続</span>
+                  )}
+                  {' · '}獲得パーツ {telemetry.earnedCards.length}個
+                </span>
               </div>
-            ) : (
-              <div className="mt-1.5 text-center text-[11px] text-slate-400">
-                まもなく4レーンに選択肢が表示されます…
-              </div>
-            )}
-          </div>
-        )}
 
-        {!activeQuiz && quizFeedback && quizFeedback.correct && (
-          <div className="flex items-center gap-2 rounded-xl border border-emerald-400/50 bg-[#051a14]/92 px-4 py-2.5 text-xs sm:text-sm font-bold text-emerald-300 shadow-xl">
-            <CheckCircle2 className="h-4.5 w-4.5 shrink-0" />
-            <span>{quizFeedback.message}</span>
-          </div>
+              <p className="mt-1.5 text-center text-sm sm:text-base font-bold leading-snug text-white">
+                {activeQuiz.questionText}
+              </p>
+
+              {activeQuiz.showLanes ? (
+                <div className="mt-2.5 grid grid-cols-4 gap-1.5 sm:gap-2">
+                  {activeQuiz.lanes.map((lane) => {
+                    const isPlayerLane = activeQuiz.playerLaneIndex === lane.laneIndex;
+                    const itemMeta = SUB_ITEMS[lane.itemKind];
+                    return (
+                      <button
+                        key={lane.laneIndex}
+                        type="button"
+                        onPointerDown={stopProp}
+                        onClick={() => onSelectQuizLane(lane.laneIndex)}
+                        className={`pointer-events-auto flex flex-col justify-between rounded-lg border px-2 py-2 text-left transition-colors cursor-pointer ${
+                          isPlayerLane
+                            ? 'border-cyan-300 bg-cyan-500/24 ring-1 ring-cyan-300/60'
+                            : 'border-white/15 bg-slate-900/85 hover:border-white/35'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1 text-[10px] font-mono-num">
+                          <span className={isPlayerLane ? 'font-bold text-cyan-200' : 'text-slate-400'}>
+                            L{lane.laneIndex + 1}
+                          </span>
+                          {!isTimeAttack && (
+                            <span
+                              className="flex items-center gap-0.5 font-bold"
+                              style={{ color: itemMeta.accentHex }}
+                            >
+                              <SubItemIcon type={lane.itemKind} className="h-3 w-3" />
+                              <span className="hidden sm:inline">{itemMeta.shortLabel}</span>
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1 text-center text-[11px] sm:text-xs font-bold leading-tight text-white line-clamp-2">
+                          {lane.termName}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mt-1.5 text-center text-[11px] text-slate-400">
+                  まもなく4レーンに選択肢が表示されます…
+                </div>
+              )}
+            </div>
+          </>
         )}
 
         {hitAlert && (
@@ -406,7 +450,11 @@ export function RaceHud({
               FINISH!
             </div>
             <div className="mt-1.5 font-display text-xl sm:text-2xl font-bold tracking-wide text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.8)]">
-              {telemetry.rank === 1 ? '1ST PLACE · VICTORY' : `${telemetry.rank}位 フィニッシュ`}
+              {isTimeAttack
+                ? 'TIME ATTACK COMPLETE'
+                : telemetry.rank === 1
+                  ? '1ST PLACE · VICTORY'
+                  : `${telemetry.rank}位 フィニッシュ`}
             </div>
           </div>
         )}
@@ -453,18 +501,37 @@ export function RaceHud({
 
       {/* Collapsible Minimal Bottom Speed & Utility Dock */}
       <div className="flex flex-col items-center gap-1.5">
-        {/* Persistent Wrong-Answer Review Banner (visible even while next question is shown) */}
-        {!isFinishing && quizFeedback && !quizFeedback.correct && (
-          <div className="flex max-w-[min(94vw,36rem)] items-center gap-2.5 rounded-xl border border-red-400/55 bg-[#1a060a]/94 px-4 py-2 text-xs sm:text-sm font-bold text-red-200 shadow-xl">
-            <XCircle className="h-4.5 w-4.5 shrink-0 text-red-400" />
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-              <span className="text-red-300">誤答スピン</span>
-              <span aria-hidden="true" className="text-red-500">·</span>
-              <span className="text-white">
-                正解は「<span className="text-amber-300">{quizFeedback.termName}</span>」
-              </span>
+        {/* Persistent Answer Review Banner (visible at bottom even while next question is shown) */}
+        {!isFinishing && quizFeedback && (
+          quizFeedback.correct ? (
+            <div className="flex max-w-[min(94vw,38rem)] items-center gap-2.5 rounded-xl border border-emerald-400/55 bg-[#051a14]/94 px-4 py-2 text-xs sm:text-sm font-bold text-emerald-200 shadow-xl">
+              <CheckCircle2 className="h-4.5 w-4.5 shrink-0 text-emerald-400" />
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="text-emerald-300">正解！</span>
+                <span aria-hidden="true" className="text-emerald-500">·</span>
+                <span className="text-white">
+                  正答は「<span className="text-amber-300">{quizFeedback.termName}</span>」
+                </span>
+                {quizFeedback.message && (
+                  <>
+                    <span aria-hidden="true" className="text-emerald-500">·</span>
+                    <span className="text-xs font-semibold text-emerald-200/90">{quizFeedback.message}</span>
+                  </>
+                )}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex max-w-[min(94vw,36rem)] items-center gap-2.5 rounded-xl border border-red-400/55 bg-[#1a060a]/94 px-4 py-2 text-xs sm:text-sm font-bold text-red-200 shadow-xl">
+              <XCircle className="h-4.5 w-4.5 shrink-0 text-red-400" />
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="text-red-300">誤答スピン</span>
+                <span aria-hidden="true" className="text-red-500">·</span>
+                <span className="text-white">
+                  正解は「<span className="text-amber-300">{quizFeedback.termName}</span>」
+                </span>
+              </div>
+            </div>
+          )
         )}
 
         {/* Mobile Portrait Compact Race Progress / Standings Bar (< sm) */}
@@ -481,8 +548,14 @@ export function RaceHud({
                 }}
               />
               {/* Lap division ticks */}
-              <span className="pointer-events-none absolute top-0 bottom-0 left-1/3 w-px bg-white/15" />
-              <span className="pointer-events-none absolute top-0 bottom-0 left-2/3 w-px bg-white/15" />
+              {telemetry.totalLaps === 2 ? (
+                <span className="pointer-events-none absolute top-0 bottom-0 left-1/2 w-px bg-white/15" />
+              ) : (
+                <>
+                  <span className="pointer-events-none absolute top-0 bottom-0 left-1/3 w-px bg-white/15" />
+                  <span className="pointer-events-none absolute top-0 bottom-0 left-2/3 w-px bg-white/15" />
+                </>
+              )}
               {telemetry.standings.map((s) => (
                 <span
                   key={s.id}
@@ -498,9 +571,11 @@ export function RaceHud({
                 />
               ))}
             </div>
-            <span className="font-mono-num text-[10px] font-bold text-cyan-300 shrink-0">
-              {telemetry.rank}位
-            </span>
+            {!isTimeAttack && (
+              <span className="font-mono-num text-[10px] font-bold text-cyan-300 shrink-0">
+                {telemetry.rank}位
+              </span>
+            )}
           </div>
         )}
 
@@ -525,55 +600,69 @@ export function RaceHud({
           </button>
 
           {!dockCollapsed && (
-            <div className="flex items-center justify-center gap-4 rounded-xl border border-white/10 bg-[#070b14]/90 px-5 py-2.5 shadow-xl">
-              {/* Speedometer */}
-              <div className="flex items-baseline gap-1.5 pr-4 border-r border-white/10 min-w-[116px]">
-                <span
-                  className={`font-display text-3xl font-bold tracking-tight font-mono-num ${
-                    telemetry.isAccelerating ? 'text-amber-400' : 'text-white'
+            <div className="flex flex-col rounded-xl border border-white/10 bg-[#070b14]/90 px-5 py-2.5 shadow-xl">
+              <div className="flex items-center justify-center gap-4">
+                {/* Speedometer */}
+                <div className="flex items-baseline gap-1.5 pr-4 border-r border-white/10 min-w-[116px]">
+                  <span
+                    className={`font-display text-3xl font-bold tracking-tight font-mono-num ${
+                      telemetry.isAccelerating ? 'text-amber-400' : 'text-white'
+                    }`}
+                  >
+                    {telemetry.speedKmh}
+                  </span>
+                  <span className="text-[11px] font-semibold text-cyan-400">KM/H</span>
+                </div>
+
+                {/* Active Status Readout */}
+                <div className="flex items-center gap-2 pr-4 border-r border-white/10 text-xs">
+                  {telemetry.hoverActive ? (
+                    <span className="font-semibold text-teal-300">AERO FLOAT</span>
+                  ) : telemetry.glowActive ? (
+                    <span className="font-semibold text-yellow-300">HYPER GLOW</span>
+                  ) : telemetry.isAccelerating ? (
+                    <span className="font-semibold text-amber-400">TURBO BOOST</span>
+                  ) : telemetry.shieldActive ? (
+                    <span className="font-semibold text-cyan-400">AEGIS SHIELD</span>
+                  ) : (
+                    <span className="text-slate-400">AUTO DRIVE</span>
+                  )}
+                </div>
+
+                {/* Utility Buttons */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={onToggleMute}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-slate-900 text-slate-300 hover:text-white cursor-pointer"
+                    aria-label={muted ? 'ミュート解除' : 'ミュート'}
+                    title={muted ? 'サウンドON' : 'ミュート'}
+                  >
+                    {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onTogglePause}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-slate-900 text-slate-300 hover:text-white cursor-pointer"
+                    aria-label="一時停止"
+                    title="一時停止 (Esc)"
+                  >
+                    <Pause className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Unnamed Manual Steering Gauge Bar (no text label) */}
+              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800/95">
+                <div
+                  className={`h-full transition-all duration-100 ${
+                    manualGaugeFull
+                      ? 'bg-gradient-to-r from-cyan-300 via-amber-300 to-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.9)]'
+                      : 'bg-gradient-to-r from-cyan-500 to-sky-300'
                   }`}
-                >
-                  {telemetry.speedKmh}
-                </span>
-                <span className="text-[11px] font-semibold text-cyan-400">KM/H</span>
-              </div>
-
-              {/* Active Status Readout */}
-              <div className="flex items-center gap-2 pr-4 border-r border-white/10 text-xs">
-                {telemetry.hoverActive ? (
-                  <span className="font-semibold text-teal-300">AERO FLOAT</span>
-                ) : telemetry.glowActive ? (
-                  <span className="font-semibold text-yellow-300">HYPER GLOW</span>
-                ) : telemetry.isAccelerating ? (
-                  <span className="font-semibold text-amber-400">TURBO BOOST</span>
-                ) : telemetry.shieldActive ? (
-                  <span className="font-semibold text-cyan-400">AEGIS SHIELD</span>
-                ) : (
-                  <span className="text-slate-400">AUTO DRIVE</span>
-                )}
-              </div>
-
-              {/* Utility Buttons */}
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={onToggleMute}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-slate-900 text-slate-300 hover:text-white cursor-pointer"
-                  aria-label={muted ? 'ミュート解除' : 'ミュート'}
-                  title={muted ? 'サウンドON' : 'ミュート'}
-                >
-                  {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={onTogglePause}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-slate-900 text-slate-300 hover:text-white cursor-pointer"
-                  aria-label="一時停止"
-                  title="一時停止 (Esc)"
-                >
-                  <Pause className="h-4 w-4" />
-                </button>
+                  style={{ width: `${Math.round(manualGaugeRatio * 100)}%` }}
+                />
               </div>
             </div>
           )}

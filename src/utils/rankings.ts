@@ -1,9 +1,10 @@
-import { CourseId, MachineId, SpeedClass } from '../game/types';
+import { GameMode, MachineId, SpeedClass } from '../game/types';
 
 export interface RankingEntry {
   id: string;
-  courseId: CourseId;
+  courseId: string;
   speedClass: SpeedClass;
+  mode?: GameMode;
   totalTimeMs: number;
   lapTimesMs: number[];
   bestLapMs: number | null;
@@ -18,8 +19,10 @@ type RankingsMap = Record<string, RankingEntry[]>;
 const RANKINGS_STORAGE_KEY = 'hyperion_gp_total_rankings_v1';
 const MAX_RANKINGS_PER_CATEGORY = 5;
 
-function getBucketKey(courseId: CourseId, speedClass: SpeedClass): string {
-  return `${courseId}_${speedClass}`;
+function getBucketKey(courseId: string, speedClass: SpeedClass, mode: GameMode = 'race'): string {
+  return mode === 'time_attack'
+    ? `${courseId}_${speedClass}_ta`
+    : `${courseId}_${speedClass}`;
 }
 
 export function loadAllRankings(): RankingsMap {
@@ -42,9 +45,13 @@ function saveAllRankings(map: RankingsMap): void {
   }
 }
 
-export function getCourseRankings(courseId: CourseId, speedClass: SpeedClass): RankingEntry[] {
+export function getCourseRankings(
+  courseId: string,
+  speedClass: SpeedClass,
+  mode: GameMode = 'race'
+): RankingEntry[] {
   const all = loadAllRankings();
-  const list = all[getBucketKey(courseId, speedClass)];
+  const list = all[getBucketKey(courseId, speedClass, mode)];
   if (!Array.isArray(list)) return [];
   return [...list]
     .filter((e) => e && typeof e.totalTimeMs === 'number' && Number.isFinite(e.totalTimeMs))
@@ -56,12 +63,14 @@ export function recordTotalTimeRanking(
   input: Omit<RankingEntry, 'id' | 'createdAt'>
 ): { entries: RankingEntry[]; placedRank: number | null } {
   const all = loadAllRankings();
-  const key = getBucketKey(input.courseId, input.speedClass);
+  const mode: GameMode = input.mode ?? 'race';
+  const key = getBucketKey(input.courseId, input.speedClass, mode);
   const current = Array.isArray(all[key]) ? [...all[key]] : [];
 
   const entryId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const entry: RankingEntry = {
     ...input,
+    mode,
     id: entryId,
     createdAt: Date.now(),
   };

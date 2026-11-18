@@ -32,10 +32,6 @@ export class BgmManager {
   private decodedCache = new Map<RaceBgmId, AudioBuffer>();
   private loadingPromises = new Map<RaceBgmId, Promise<AudioBuffer | null>>();
   private trackStatuses: Record<RaceBgmId, TrackLoadStatus> = {
-    'hyper-cyber-drive': 'idle',
-    'neo-tokyo-sprint': 'idle',
-    'neon-overdrive': 'idle',
-    'velocity-peak': 'idle',
     'kiokuyouryou-no-uta': 'idle',
   };
 

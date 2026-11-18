@@ -1,9 +1,4 @@
-export type RaceBgmId =
-  | 'hyper-cyber-drive'
-  | 'neo-tokyo-sprint'
-  | 'neon-overdrive'
-  | 'velocity-peak'
-  | 'kiokuyouryou-no-uta';
+export type RaceBgmId = 'kiokuyouryou-no-uta';
 
 export type RaceBgmSelection = 'random' | RaceBgmId;
 
@@ -19,30 +14,6 @@ export const MENU_MIDI_TITLE = 'Neon_Tachyon_8-Bit_Overdrive.mid';
 
 export const RACE_BGM_TRACKS: RaceBgmTrackMeta[] = [
   {
-    id: 'hyper-cyber-drive',
-    title: 'Hyper-Cyber Drive',
-    fileName: 'Hyper-Cyber Drive.mp3',
-    url: '/bgm/Hyper-Cyber Drive.mp3',
-  },
-  {
-    id: 'neo-tokyo-sprint',
-    title: 'Neo-Tokyo Sprint',
-    fileName: 'Neo-Tokyo Sprint.mp3',
-    url: '/bgm/Neo-Tokyo Sprint.mp3',
-  },
-  {
-    id: 'neon-overdrive',
-    title: 'Neon Overdrive',
-    fileName: 'Neon Overdrive.mp3',
-    url: '/bgm/Neon Overdrive.mp3',
-  },
-  {
-    id: 'velocity-peak',
-    title: 'Velocity Peak',
-    fileName: 'Velocity Peak.mp3',
-    url: '/bgm/Velocity Peak.mp3',
-  },
-  {
     id: 'kiokuyouryou-no-uta',
     title: '記憶容量と処理速度のうた',
     fileName: 'kiokuyouryou_no_uta.mp3',
@@ -55,6 +26,8 @@ export interface GameSettings {
   sfxEnabled: boolean;
   masterMuted: boolean;
   raceBgm: RaceBgmSelection;
+  showBestGhost: boolean;
+  showLastGhost: boolean;
 }
 
 const SETTINGS_STORAGE_KEY = 'hyperion_gp_settings_v1';
@@ -64,6 +37,8 @@ const DEFAULT_SETTINGS: GameSettings = {
   sfxEnabled: true,
   masterMuted: false,
   raceBgm: 'random',
+  showBestGhost: true,
+  showLastGhost: true,
 };
 
 const VALID_TRACK_IDS = new Set<string>(RACE_BGM_TRACKS.map((t) => t.id));
@@ -85,6 +60,8 @@ export function loadGameSettings(): GameSettings {
         rawRaceBgm === 'random' || (typeof rawRaceBgm === 'string' && VALID_TRACK_IDS.has(rawRaceBgm))
           ? (rawRaceBgm as RaceBgmSelection)
           : 'random',
+      showBestGhost: typeof parsed.showBestGhost === 'boolean' ? parsed.showBestGhost : true,
+      showLastGhost: typeof parsed.showLastGhost === 'boolean' ? parsed.showLastGhost : true,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
