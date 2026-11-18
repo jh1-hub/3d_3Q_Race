@@ -6,7 +6,12 @@ export class RaceAudioEngine {
   private engineFilter: BiquadFilterNode | null = null;
   private engineGain: GainNode | null = null;
   private muted = false;
+  private sfxEnabled = true;
   private initialized = false;
+
+  private isAudioMuted(): boolean {
+    return this.muted || !this.sfxEnabled;
+  }
 
   public init(): void {
     if (this.initialized) {
@@ -24,7 +29,7 @@ export class RaceAudioEngine {
       this.ctx = ctx;
 
       const master = ctx.createGain();
-      master.gain.value = this.muted ? 0 : 0.32;
+      master.gain.value = this.isAudioMuted() ? 0 : 0.32;
       master.connect(ctx.destination);
       this.masterGain = master;
 
@@ -65,12 +70,19 @@ export class RaceAudioEngine {
   public setMuted(muted: boolean): void {
     this.muted = muted;
     if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setTargetAtTime(muted ? 0 : 0.32, this.ctx.currentTime, 0.04);
+      this.masterGain.gain.setTargetAtTime(this.isAudioMuted() ? 0 : 0.32, this.ctx.currentTime, 0.04);
+    }
+  }
+
+  public setSfxEnabled(enabled: boolean): void {
+    this.sfxEnabled = enabled;
+    if (this.masterGain && this.ctx) {
+      this.masterGain.gain.setTargetAtTime(this.isAudioMuted() ? 0 : 0.32, this.ctx.currentTime, 0.04);
     }
   }
 
   public isMuted(): boolean {
-    return this.muted;
+    return this.isAudioMuted();
   }
 
   public updateEngine(speedNorm: number, isBoosting: boolean, active: boolean): void {
@@ -78,7 +90,7 @@ export class RaceAudioEngine {
       return;
     }
     const now = this.ctx.currentTime;
-    if (!active) {
+    if (!active || this.isAudioMuted()) {
       this.engineGain.gain.setTargetAtTime(0.0, now, 0.08);
       return;
     }
@@ -92,7 +104,7 @@ export class RaceAudioEngine {
   }
 
   public playCountdownBeep(isGo: boolean): void {
-    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    if (!this.initialized || !this.ctx || !this.masterGain || this.isAudioMuted()) return;
     const now = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -110,7 +122,7 @@ export class RaceAudioEngine {
   }
 
   public playBoostPad(): void {
-    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    if (!this.initialized || !this.ctx || !this.masterGain || this.isAudioMuted()) return;
     const now = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -134,7 +146,7 @@ export class RaceAudioEngine {
   }
 
   public playEnergyRestore(): void {
-    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    if (!this.initialized || !this.ctx || !this.masterGain || this.isAudioMuted()) return;
     const now = this.ctx.currentTime;
     [660, 990].forEach((freq, i) => {
       if (!this.ctx || !this.masterGain) return;
@@ -152,7 +164,7 @@ export class RaceAudioEngine {
   }
 
   public playItemPickup(): void {
-    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    if (!this.initialized || !this.ctx || !this.masterGain || this.isAudioMuted()) return;
     const now = this.ctx.currentTime;
     [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => {
       if (!this.ctx || !this.masterGain) return;
@@ -171,7 +183,7 @@ export class RaceAudioEngine {
   }
 
   public playItemUse(): void {
-    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    if (!this.initialized || !this.ctx || !this.masterGain || this.isAudioMuted()) return;
     const now = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -187,7 +199,7 @@ export class RaceAudioEngine {
   }
 
   public playHitImpact(): void {
-    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    if (!this.initialized || !this.ctx || !this.masterGain || this.isAudioMuted()) return;
     const now = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -203,7 +215,7 @@ export class RaceAudioEngine {
   }
 
   public playWallHit(): void {
-    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    if (!this.initialized || !this.ctx || !this.masterGain || this.isAudioMuted()) return;
     const now = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -219,7 +231,7 @@ export class RaceAudioEngine {
   }
 
   public playLapComplete(isFinish: boolean): void {
-    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    if (!this.initialized || !this.ctx || !this.masterGain || this.isAudioMuted()) return;
     const notes = isFinish ? [523.25, 659.25, 783.99, 1046.5] : [587.33, 880];
     notes.forEach((freq, idx) => {
       if (!this.ctx || !this.masterGain) return;
@@ -238,7 +250,7 @@ export class RaceAudioEngine {
   }
 
   public playLaserShot(enhanced = false): void {
-    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    if (!this.initialized || !this.ctx || !this.masterGain || this.isAudioMuted()) return;
     const now = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -259,7 +271,7 @@ export class RaceAudioEngine {
   }
 
   public playOrbitalExplosion(): void {
-    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    if (!this.initialized || !this.ctx || !this.masterGain || this.isAudioMuted()) return;
     const now = this.ctx.currentTime;
     const subOsc = this.ctx.createOscillator();
     const subGain = this.ctx.createGain();
@@ -287,7 +299,7 @@ export class RaceAudioEngine {
   }
 
   public playHoverGlide(): void {
-    if (!this.initialized || !this.ctx || !this.masterGain || this.muted) return;
+    if (!this.initialized || !this.ctx || !this.masterGain || this.isAudioMuted()) return;
     const now = this.ctx.currentTime;
     [330, 495, 660].forEach((freq, idx) => {
       if (!this.ctx || !this.masterGain) return;

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Car, Cpu, MapPin, Play, RotateCcw, Trophy } from 'lucide-react';
+import { Car, Cpu, Loader2, MapPin, Play, RotateCcw, Settings, Trophy } from 'lucide-react';
 import {
   CourseId,
   COURSES,
@@ -19,12 +19,14 @@ interface MenuOverlayProps {
   selectedMachine: MachineId;
   speedClass: SpeedClass;
   collection: CardCollectionMap;
+  bgmPreparing: boolean;
   onSelectCourse: (id: CourseId) => void;
   onSelectMachine: (id: MachineId) => void;
   onSelectClass: (cls: SpeedClass) => void;
   onStartRace: () => void;
   onReturnMenu: () => void;
   onOpenCollection: () => void;
+  onOpenSettings: () => void;
 }
 
 export function MenuOverlay({
@@ -33,12 +35,14 @@ export function MenuOverlay({
   selectedMachine,
   speedClass,
   collection,
+  bgmPreparing,
   onSelectCourse,
   onSelectMachine,
   onSelectClass,
   onStartRace,
   onReturnMenu,
   onOpenCollection,
+  onOpenSettings,
 }: MenuOverlayProps) {
   const [mobileTab, setMobileTab] = useState<'course' | 'machine'>('course');
 
@@ -48,17 +52,26 @@ export function MenuOverlay({
 
   if (telemetry.phase === 'finished') {
     const finishedCourse = COURSES.find((c) => c.id === telemetry.courseId) ?? activeCourse;
+    const minLapMs =
+      telemetry.lapTimesMs.length > 0 ? Math.min(...telemetry.lapTimesMs) : null;
     return (
       <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center bg-[#05070e]/78 p-3 sm:p-4 overflow-y-auto">
         <div className="w-full max-w-2xl rounded-2xl border border-white/15 bg-[#070b14]/96 p-4 sm:p-6 shadow-2xl my-auto">
           <div className="flex items-center justify-between border-b border-white/10 pb-3.5 sm:pb-4">
-            <div>
-              <p className="text-xs font-medium tracking-wider text-cyan-400">
-                RACE COMPLETE · {finishedCourse.name}
+            <div className="min-w-0">
+              <p className="text-xs font-medium tracking-wider text-cyan-400 truncate">
+                RACE COMPLETE · {finishedCourse.jpName} · {telemetry.speedClass.toUpperCase()} · {telemetry.machineName}
               </p>
-              <h2 className="font-display text-2xl sm:text-3xl font-bold text-white">
-                {telemetry.rank === 1 ? '1ST PLACE · VICTORY' : `${telemetry.rank}位 フィニッシュ`}
-              </h2>
+              <div className="mt-0.5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <h2 className="font-display text-2xl sm:text-3xl font-bold text-white">
+                  {telemetry.rank === 1 ? '1ST PLACE · VICTORY' : `${telemetry.rank}位 フィニッシュ`}
+                </h2>
+                {telemetry.rankingPlacement !== null && (
+                  <span className="font-mono-num text-xs font-bold text-amber-300">
+                    自己ベスト {telemetry.rankingPlacement}位 ランクイン
+                  </span>
+                )}
+              </div>
             </div>
             <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl border border-amber-400/30 bg-amber-500/15 text-amber-400 shrink-0">
               <Trophy className="h-5 w-5 sm:h-6 sm:w-6" />
@@ -90,6 +103,38 @@ export function MenuOverlay({
               </div>
             </div>
           </div>
+
+          {/* All Individual Lap Times */}
+          {telemetry.lapTimesMs.length > 0 && (
+            <div className="mt-3 rounded-xl border border-white/10 bg-slate-900/50 p-2.5 sm:p-3">
+              <div className="mb-1.5 text-[11px] font-medium text-slate-400">
+                各ラップタイム
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {telemetry.lapTimesMs.map((lt, idx) => {
+                  const isBest = minLapMs !== null && lt === minLapMs;
+                  return (
+                    <div
+                      key={idx}
+                      className={`rounded-lg border px-2.5 py-1.5 ${
+                        isBest
+                          ? 'border-cyan-400/45 bg-cyan-500/10'
+                          : 'border-white/8 bg-slate-950/60'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between text-[10px] font-mono-num">
+                        <span className="text-slate-400">LAP {idx + 1}</span>
+                        {isBest && <span className="font-bold text-cyan-300">BEST</span>}
+                      </div>
+                      <div className="mt-0.5 font-mono-num text-xs sm:text-sm font-bold text-white">
+                        {formatRaceTime(lt)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="mt-4 grid grid-cols-1 gap-3.5 sm:gap-4 md:grid-cols-2">
             {/* Final Standings */}
@@ -183,10 +228,20 @@ export function MenuOverlay({
             <button
               type="button"
               onClick={onStartRace}
-              className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-cyan-400 cursor-pointer whitespace-nowrap"
+              disabled={bgmPreparing}
+              className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-cyan-400 disabled:opacity-70 cursor-pointer whitespace-nowrap"
             >
-              <RotateCcw className="h-4 w-4" />
-              再レース
+              {bgmPreparing ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  BGM準備中...
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="h-4 w-4" />
+                  再レース
+                </>
+              )}
             </button>
             <button
               type="button"
@@ -253,6 +308,16 @@ export function MenuOverlay({
               </div>
             </div>
           </div>
+
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            aria-label="設定とランキング"
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-[#070b14]/92 px-3 py-2 text-xs font-semibold text-slate-200 transition-colors hover:border-cyan-400/60 hover:text-white cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <Settings className="h-4 w-4 text-cyan-400 shrink-0" />
+            <span className="hidden sm:inline">設定</span>
+          </button>
         </div>
       </div>
 
@@ -423,10 +488,20 @@ export function MenuOverlay({
           <button
             type="button"
             onClick={onStartRace}
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-6 font-display text-base font-bold tracking-wider text-slate-950 transition-colors hover:bg-cyan-400 cursor-pointer"
+            disabled={bgmPreparing}
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-6 font-display text-base font-bold tracking-wider text-slate-950 transition-colors hover:bg-cyan-400 disabled:opacity-75 cursor-pointer whitespace-nowrap"
           >
-            <Play className="h-4.5 w-4.5 fill-current" />
-            レース開始
+            {bgmPreparing ? (
+              <>
+                <Loader2 className="h-4.5 w-4.5 animate-spin" />
+                BGM準備中...
+              </>
+            ) : (
+              <>
+                <Play className="h-4.5 w-4.5 fill-current" />
+                レース開始
+              </>
+            )}
           </button>
         </div>
       </div>
@@ -596,10 +671,20 @@ export function MenuOverlay({
             <button
               type="button"
               onClick={onStartRace}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-6 py-2.5 font-display text-base font-bold tracking-wider text-slate-950 transition-colors hover:bg-cyan-400 cursor-pointer"
+              disabled={bgmPreparing}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-6 py-2.5 font-display text-base font-bold tracking-wider text-slate-950 transition-colors hover:bg-cyan-400 disabled:opacity-75 cursor-pointer whitespace-nowrap"
             >
-              <Play className="h-4 w-4 fill-current" />
-              レース開始
+              {bgmPreparing ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  BGM準備中...
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4 fill-current" />
+                  レース開始
+                </>
+              )}
             </button>
           </div>
         </div>

@@ -2,14 +2,25 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CardCollectionModal } from './components/CardCollectionModal';
 import { MenuOverlay } from './components/MenuOverlay';
 import { RaceHud, TouchDragIndicator } from './components/RaceHud';
+import { SettingsModal } from './components/SettingsModal';
+import { BgmManager, BgmSnapshot } from './game/bgm';
 import { RaceEngine } from './game/engine';
 import { CourseId, MachineId, RaceTelemetry, SpeedClass } from './game/types';
 import { CardCollectionMap } from './types';
 import { loadCardCollection } from './utils/cardCollection';
+import {
+  GameSettings,
+  loadGameSettings,
+  RaceBgmSelection,
+  saveGameSettings,
+} from './utils/settings';
 
 const INITIAL_TELEMETRY: RaceTelemetry = {
   phase: 'menu',
   courseId: 'orbital',
+  speedClass: 'normal',
+  machineId: 'valkyrie',
+  machineName: 'VALKYRIE-X',
   countdownValue: 3,
   speedKmh: 0,
   isAccelerating: false,
@@ -18,10 +29,12 @@ const INITIAL_TELEMETRY: RaceTelemetry = {
   lap: 1,
   totalLaps: 3,
   currentLapMs: 0,
+  lapTimesMs: [],
   bestLapMs: null,
   totalRaceMs: 0,
   allTimeBestLapMs: null,
   isNewRecord: false,
+  rankingPlacement: null,
   markers: [],
   standings: [],
   wrongWay: false,
@@ -51,6 +64,7 @@ const INITIAL_TOUCH_DRAG: TouchDragIndicator = {
 export default function App() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<RaceEngine | null>(null);
+  const bgmRef = useRef<BgmManager | null>(null);
   const activePointerRef = useRef<{
     id: number;
     startX: number;
@@ -59,6 +73,25 @@ export default function App() {
     movedHorizontally: boolean;
     itemFired: boolean;
   } | null>(null);
+
+  const [settings, setSettings] = useState<GameSettings>(() => loadGameSettings());
+  const settingsRef = useRef<GameSettings>(settings);
+  settingsRef.current = settings;
+
+  const [bgmSnapshot, setBgmSnapshot] = useState<BgmSnapshot>({
+    statuses: {
+      'hyper-cyber-drive': 'idle',
+      'neo-tokyo-sprint': 'idle',
+      'neon-overdrive': 'idle',
+      'velocity-peak': 'idle',
+      'kokuyouryou-no-uta': 'idle',
+    },
+    upcomingRandomTrackId: 'hyper-cyber-drive',
+    activeRaceTrackId: null,
+    midiReady: false,
+    midiError: null,
+  });
+  const [bgmPreparing, setBgmPreparing] = useState(false);
 
   const [telemetry, setTelemetry] = useState<RaceTelemetry>(INITIAL_TELEMETRY);
   const [minimapPoints, setMinimapPoints] = useState<{ x: number; y: number }[]>([]);
@@ -71,6 +104,7 @@ export default function App() {
   const [touchDrag, setTouchDrag] = useState<TouchDragIndicator>(INITIAL_TOUCH_DRAG);
   const [collection, setCollection] = useState<CardCollectionMap>(() => loadCardCollection());
   const [collectionOpen, setCollectionOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const refreshCollection = useCallback(() => {
     setCollection(loadCardCollection());
@@ -80,16 +114,27 @@ export default function App() {
     const mountEl = canvasMountRef.current;
     if (!mountEl) return;
 
+    const initialSettings = settingsRef.current;
+    const bgm = new BgmManager();
+    bgmRef.current = bgm;
+    const unsubBgm = bgm.subscribe((snap) => setBgmSnapshot(snap));
+    bgm.setBgmEnabled(initialSettings.bgmEnabled, initialSettings.raceBgm);
+    bgm.enterMenu(initialSettings.raceBgm);
+
     const engine = new RaceEngine(
       mountEl,
       (next) => setTelemetry(next),
       (lost) => setContextLost(lost),
       () => setCollection(loadCardCollection())
     );
+    engine.setSfxEnabled(initialSettings.sfxEnabled);
     engineRef.current = engine;
     setMinimapPoints(engine.getMinimapPoints());
 
     return () => {
+      unsubBgm();
+      bgm.dispose();
+      bgmRef.current = null;
       engine.dispose();
       engineRef.current = null;
     };
@@ -231,18 +276,54 @@ export default function App() {
     engineRef.current?.setSpeedClass(cls);
   }, []);
 
-  const handleStartRace = useCallback(() => {
-    engineRef.current?.startRace();
-  }, []);
+  const handleStartRace = useCallback(async () => {
+    if (bgmPreparing) return;
+    setBgmPreparing(true);
+    try {
+      await bgmRef.current?.prepareAndStartRace(settingsRef.current.raceBgm);
+      engineRef.current?.startRace();
+    } finally {
+      setBgmPreparing(false);
+    }
+  }, [bgmPreparing]);
 
   const handleReturnMenu = useCallback(() => {
     engineRef.current?.returnToMenu();
+    bgmRef.current?.enterMenu(settingsRef.current.raceBgm);
   }, []);
 
   const handleToggleMute = useCallback(() => {
     setMuted((prev) => {
       const next = !prev;
       engineRef.current?.setMuted(next);
+      bgmRef.current?.setMasterMuted(next);
+      return next;
+    });
+  }, []);
+
+  const handleToggleBgm = useCallback(() => {
+    setSettings((prev) => {
+      const next: GameSettings = { ...prev, bgmEnabled: !prev.bgmEnabled };
+      saveGameSettings(next);
+      bgmRef.current?.setBgmEnabled(next.bgmEnabled, next.raceBgm);
+      return next;
+    });
+  }, []);
+
+  const handleToggleSfx = useCallback(() => {
+    setSettings((prev) => {
+      const next: GameSettings = { ...prev, sfxEnabled: !prev.sfxEnabled };
+      saveGameSettings(next);
+      engineRef.current?.setSfxEnabled(next.sfxEnabled);
+      return next;
+    });
+  }, []);
+
+  const handleSelectRaceBgm = useCallback((raceBgm: RaceBgmSelection) => {
+    setSettings((prev) => {
+      const next: GameSettings = { ...prev, raceBgm };
+      saveGameSettings(next);
+      bgmRef.current?.preloadForSelection(raceBgm);
       return next;
     });
   }, []);
@@ -284,6 +365,7 @@ export default function App() {
         selectedMachine={selectedMachine}
         speedClass={speedClass}
         collection={collection}
+        bgmPreparing={bgmPreparing}
         onSelectCourse={handleSelectCourse}
         onSelectMachine={handleSelectMachine}
         onSelectClass={handleSelectClass}
@@ -293,6 +375,7 @@ export default function App() {
           refreshCollection();
           setCollectionOpen(true);
         }}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       {/* Card Collection Modal */}
@@ -300,6 +383,19 @@ export default function App() {
         open={collectionOpen}
         collection={collection}
         onClose={() => setCollectionOpen(false)}
+      />
+
+      {/* Settings & Rankings Modal */}
+      <SettingsModal
+        open={settingsOpen}
+        settings={settings}
+        bgmSnapshot={bgmSnapshot}
+        initialCourse={selectedCourse}
+        initialSpeedClass={speedClass}
+        onClose={() => setSettingsOpen(false)}
+        onToggleBgm={handleToggleBgm}
+        onToggleSfx={handleToggleSfx}
+        onSelectRaceBgm={handleSelectRaceBgm}
       />
 
       {/* In-Race Unobtrusive HUD */}

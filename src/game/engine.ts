@@ -32,6 +32,7 @@ import {
   recordCollectedCard,
   recordTermAnswer,
 } from '../utils/cardCollection';
+import { recordTotalTimeRanking } from '../utils/rankings';
 
 interface RacerState {
   id: string;
@@ -51,6 +52,7 @@ interface RacerState {
   finished: boolean;
   finishTimeMs: number;
   lapStartMs: number;
+  lapTimesMs: number[];
   bestLapMs: number | null;
   sectorFlags: number; // bitmask 1 | 2 | 4
   rollVisual: number;
@@ -66,6 +68,7 @@ interface RacerState {
   heldItemHoldTime: number;
   shieldTimer: number;
   hitSpinTimer: number;
+  quizPenaltyTimer: number;
   postHitGraceTimer: number;
   itemPower: number;
   aiItemCooldown: number;
@@ -188,6 +191,7 @@ export class RaceEngine {
   private hitAlertTimer = 0;
   private allTimeBestLapMs: number | null = null;
   private isNewRecord = false;
+  private rankingPlacement: number | null = null;
   private lastWallSoundTime = 0;
   private menuOrbitAngle = 0.6;
   private camPos = new THREE.Vector3();
@@ -406,6 +410,10 @@ export class RaceEngine {
     this.audio.setMuted(muted);
   }
 
+  public setSfxEnabled(enabled: boolean): void {
+    this.audio.setSfxEnabled(enabled);
+  }
+
   public setTouchInput(partial: Partial<TouchInputState>): void {
     Object.assign(this.touchInput, partial);
   }
@@ -434,6 +442,7 @@ export class RaceEngine {
     this.hitAlertSource = null;
     this.hitAlertTimer = 0;
     this.isNewRecord = false;
+    this.rankingPlacement = null;
     this.camInitialized = false;
 
     this.nextQuizRowIndex = 0;
@@ -470,6 +479,7 @@ export class RaceEngine {
     this.camInitialized = false;
     this.hitAlertSource = null;
     this.hitAlertTimer = 0;
+    this.rankingPlacement = null;
     this.activeQuiz = null;
     this.quizLanesRevealed = false;
     this.quizFeedback = null;
@@ -512,7 +522,7 @@ export class RaceEngine {
         secondary: 0xf59e0b,
         accent: 0xfbbf24,
         hex: '#F59E0B',
-        speedFactor: 0.96,
+        speedFactor: 0.98,
         offset: -4.2,
         itemPower: 1.0,
       },
@@ -524,7 +534,7 @@ export class RaceEngine {
         secondary: 0xef4444,
         accent: 0xf43f5e,
         hex: '#F43F5E',
-        speedFactor: 0.92,
+        speedFactor: 0.95,
         offset: 4.2,
         itemPower: 1.05,
       },
@@ -536,7 +546,7 @@ export class RaceEngine {
         secondary: 0xd1fae5,
         accent: 0x10b981,
         hex: '#10B981',
-        speedFactor: 0.88,
+        speedFactor: 0.92,
         offset: -1.8,
         itemPower: 0.95,
       },
@@ -570,6 +580,7 @@ export class RaceEngine {
       finished: false,
       finishTimeMs: 0,
       lapStartMs: 0,
+      lapTimesMs: [],
       bestLapMs: null,
       sectorFlags: 0,
       rollVisual: 0,
@@ -585,6 +596,7 @@ export class RaceEngine {
       heldItemHoldTime: 0,
       shieldTimer: 0,
       hitSpinTimer: 0,
+      quizPenaltyTimer: 0,
       postHitGraceTimer: 0,
       itemPower: playerSpec.itemPower,
       aiItemCooldown: 2,
@@ -623,6 +635,7 @@ export class RaceEngine {
         finished: false,
         finishTimeMs: 0,
         lapStartMs: 0,
+        lapTimesMs: [],
         bestLapMs: null,
         sectorFlags: 0,
         rollVisual: 0,
@@ -638,6 +651,7 @@ export class RaceEngine {
         heldItemHoldTime: 0,
         shieldTimer: 0,
         hitSpinTimer: 0,
+        quizPenaltyTimer: 0,
         postHitGraceTimer: 0,
         itemPower: cfg.itemPower,
         aiItemCooldown: 2.0 + idx * 0.8,
@@ -668,6 +682,7 @@ export class RaceEngine {
       r.finished = false;
       r.finishTimeMs = 0;
       r.lapStartMs = 0;
+      r.lapTimesMs = [];
       r.bestLapMs = null;
       r.sectorFlags = 0;
       r.accelSurgeTimer = 0;
@@ -680,6 +695,7 @@ export class RaceEngine {
       r.heldItemHoldTime = 0;
       r.shieldTimer = 0;
       r.hitSpinTimer = 0;
+      r.quizPenaltyTimer = 0;
       r.postHitGraceTimer = 0;
       r.aiLastGateKey = '';
       r.rollVisual = 0;
@@ -886,6 +902,9 @@ export class RaceEngine {
       if (r.hitSpinTimer > 0) {
         r.hitSpinTimer = Math.max(0, r.hitSpinTimer - dt);
       }
+      if (r.quizPenaltyTimer > 0) {
+        r.quizPenaltyTimer = Math.max(0, r.quizPenaltyTimer - dt);
+      }
       if (r.postHitGraceTimer > 0) {
         r.postHitGraceTimer = Math.max(0, r.postHitGraceTimer - dt);
       }
@@ -968,15 +987,16 @@ export class RaceEngine {
     const accelerating = r.accelSurgeTimer > 0 || superTurbo || glowActive;
 
     const baseMaxSpeed = (spec.maxSpeedKmh / 3.6) * classMultiplier;
-    const hitPenalty = r.hitSpinTimer > 0 ? 0.52 : 1.0;
+    const hitPenalty = r.hitSpinTimer > 0 ? 0.40 : r.quizPenaltyTimer > 0 ? 0.76 : 1.0;
+    const penaltyAccelMult = r.hitSpinTimer > 0 ? 0.38 : r.quizPenaltyTimer > 0 ? 0.65 : 1.0;
     const shieldBonus = r.shieldTimer > 0 ? 1.04 + 0.04 * r.itemPower : 1.0;
     const glowBonus = glowActive ? (r.itemPower >= 1.3 ? 1.24 : 1.16) : 1.0;
     const hoverBonus = hoverActive ? (r.itemPower >= 1.3 ? 1.16 : 1.10) : 1.0;
-    const turboSpeedMult = superTurbo ? 1.44 : r.accelSurgeTimer > 0 ? 1.28 : 1.0;
-    const turboAccelMult = superTurbo ? 2.2 : r.accelSurgeTimer > 0 ? 1.7 : glowActive ? 1.45 : 1.0;
+    const turboSpeedMult = superTurbo ? 1.46 : r.accelSurgeTimer > 0 ? 1.32 : 1.0;
+    const turboAccelMult = superTurbo ? 2.4 : r.accelSurgeTimer > 0 ? 1.85 : glowActive ? 1.45 : 1.0;
     const activeMaxSpeed =
       baseMaxSpeed * hitPenalty * shieldBonus * Math.max(turboSpeedMult, glowBonus) * hoverBonus;
-    const accelRate = 48 * spec.accel * classMultiplier * turboAccelMult;
+    const accelRate = 48 * spec.accel * classMultiplier * turboAccelMult * penaltyAccelMult;
     const brakeRate = 68;
 
     if (accelInput > 0) {
@@ -1077,24 +1097,24 @@ export class RaceEngine {
     const isHard = this.speedClass === 'hard';
     if (!isFinalStretch && !this.playerRacer.finished) {
       if (isHard) {
-        // Hard class: aggressive pack tension
+        // Hard class: aggressive pack tension without slowing down to wait when player misses quizzes
         if (gap > 0.06) {
           rubberBand = 1.62;
         } else if (gap > 0.015) {
           rubberBand = THREE.MathUtils.clamp(1.08 + gap * 7.5, 1.08, 1.54);
         } else if (gap < -0.025) {
-          rubberBand = THREE.MathUtils.clamp(0.95 + gap * 1.6, 0.80, 0.95);
+          rubberBand = THREE.MathUtils.clamp(1.0 + gap * 0.20, 0.95, 1.01);
         } else {
           rubberBand = 1.06;
         }
       } else {
-        // Normal class: steady competitive tension without unnaturally overtaking a 100%-correct player
+        // Normal class: honest pace — steady if player falls behind, competitive if player answers cleanly
         if (gap > 0.08) {
-          rubberBand = 1.14;
+          rubberBand = 1.12;
         } else if (gap > 0.02) {
-          rubberBand = THREE.MathUtils.clamp(0.99 + gap * 2.4, 0.99, 1.12);
+          rubberBand = THREE.MathUtils.clamp(0.99 + gap * 2.2, 0.99, 1.10);
         } else if (gap < -0.02) {
-          rubberBand = THREE.MathUtils.clamp(0.91 + gap * 1.5, 0.78, 0.91);
+          rubberBand = THREE.MathUtils.clamp(0.97 + gap * 0.25, 0.92, 0.97);
         } else {
           rubberBand = 0.97;
         }
@@ -1102,8 +1122,8 @@ export class RaceEngine {
     } else {
       // Final sprint after Gate 1: stay naturally fast without sudden deceleration
       rubberBand = isHard
-        ? THREE.MathUtils.clamp(1 + gap * 0.30, 0.91, 1.03)
-        : THREE.MathUtils.clamp(0.94 + gap * 0.24, 0.86, 0.97);
+        ? THREE.MathUtils.clamp(1.01 + gap * 0.20, 0.96, 1.04)
+        : THREE.MathUtils.clamp(0.96 + gap * 0.20, 0.91, 0.98);
     }
 
     const baseAiSpeed = (playerSpec.maxSpeedKmh / 3.6) * classMultiplier;
@@ -1366,15 +1386,16 @@ export class RaceEngine {
       });
       this.onCollectionChange?.();
 
-      // Correct answer: grant Turbo boost AND the lane's item
-      r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 2.4 * r.itemPower);
+      // Correct answer: clear any lingering quiz drag, grant stronger Turbo boost AND the lane's item
+      r.quizPenaltyTimer = 0;
+      const classMultiplier = this.speedClass === 'hard' ? 1.10 : 1.0;
+      const baseMax = (this.getSelectedSpec().maxSpeedKmh / 3.6) * classMultiplier;
+      r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 3.2 * r.itemPower);
+      r.speed = Math.max(r.speed, baseMax * (choice.itemKind === 'boost' ? 1.42 : 1.24));
 
       if (choice.itemKind === 'boost') {
-        const classMultiplier = this.speedClass === 'hard' ? 1.10 : 1.0;
-        const baseMax = (this.getSelectedSpec().maxSpeedKmh / 3.6) * classMultiplier;
-        r.superTurboTimer = Math.max(r.superTurboTimer, 3.2 * r.itemPower);
-        r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 3.6 * r.itemPower);
-        r.speed = Math.max(r.speed, baseMax * 1.38);
+        r.superTurboTimer = Math.max(r.superTurboTimer, 3.6 * r.itemPower);
+        r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 4.0 * r.itemPower);
       }
 
       if (r.heldItem) {
@@ -1411,13 +1432,15 @@ export class RaceEngine {
       }
       this.quizFeedbackTimer = 3.2;
     } else {
-      // Wrong answer: spin out and keep correct-answer review visible through the next question
-      r.hitSpinTimer = 1.65;
-      r.speed *= 0.48;
+      // Wrong answer: stronger spin out + lingering engine stall so repeated misses cannot be erased easily
+      r.hitSpinTimer = 2.2;
+      r.quizPenaltyTimer = 4.5;
+      r.speed *= 0.28;
       r.accelSurgeTimer = 0;
       r.superTurboTimer = 0;
+      r.glowBoostTimer = 0;
       this.track.sampleAtS(r.s, _sample);
-      this.itemSystem.spawnHitBurst(r.pos, _sample.up, 0xef4444, 1.15);
+      this.itemSystem.spawnHitBurst(r.pos, _sample.up, 0xef4444, 1.3);
       this.audio.playHitImpact();
 
       this.quizFeedback = {
@@ -1425,7 +1448,7 @@ export class RaceEngine {
         termName: correctChoice.term.name,
         message: `誤答スピン！ 正解は「${correctChoice.term.name}」`,
       };
-      this.triggerHitAlert('誤答スピン', '#EF4444', 1.8);
+      this.triggerHitAlert('誤答スピン', '#EF4444', 2.2);
       this.pushEventNotice(`不正解スピン… 正解: ${correctChoice.term.name}`);
       this.quizFeedbackTimer = 18.0;
     }
@@ -1812,6 +1835,7 @@ export class RaceEngine {
       const lapTime = this.raceElapsedMs - r.lapStartMs;
       r.lapStartMs = this.raceElapsedMs;
       r.sectorFlags = 0;
+      r.lapTimesMs.push(lapTime);
 
       if (r.bestLapMs === null || lapTime < r.bestLapMs) {
         r.bestLapMs = lapTime;
@@ -1832,6 +1856,18 @@ export class RaceEngine {
         r.finishTimeMs = this.raceElapsedMs;
         if (r.isPlayer) {
           this.phase = 'finished';
+          const playerRank = this.getRacerRank(r);
+          const { placedRank } = recordTotalTimeRanking({
+            courseId: this.courseId,
+            speedClass: this.speedClass,
+            totalTimeMs: r.finishTimeMs,
+            lapTimesMs: [...r.lapTimesMs],
+            bestLapMs: r.bestLapMs,
+            machineId: this.machineId,
+            machineName: this.getSelectedSpec().name,
+            rankFinished: playerRank,
+          });
+          this.rankingPlacement = placedRank;
           this.audio.playLapComplete(true);
           this.emitTelemetry();
         }
@@ -2146,6 +2182,9 @@ export class RaceEngine {
     this.onTelemetry({
       phase: this.phase,
       courseId: this.courseId,
+      speedClass: this.speedClass,
+      machineId: this.machineId,
+      machineName: this.getSelectedSpec().name,
       countdownValue: Math.max(0, Math.ceil(this.countdownTimer)),
       speedKmh: Math.round(Math.abs(this.playerRacer.speed) * 3.6),
       isAccelerating: accelerating,
@@ -2154,10 +2193,12 @@ export class RaceEngine {
       lap: Math.min(this.playerRacer.lap, TOTAL_LAPS),
       totalLaps: TOTAL_LAPS,
       currentLapMs: Math.max(0, this.raceElapsedMs - this.playerRacer.lapStartMs),
+      lapTimesMs: [...this.playerRacer.lapTimesMs],
       bestLapMs: this.playerRacer.bestLapMs,
       totalRaceMs: this.playerRacer.finished ? this.playerRacer.finishTimeMs : this.raceElapsedMs,
       allTimeBestLapMs: this.allTimeBestLapMs,
       isNewRecord: this.isNewRecord,
+      rankingPlacement: this.rankingPlacement,
       markers,
       standings,
       wrongWay: this.playerRacer.speed < -5,

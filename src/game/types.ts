@@ -307,6 +307,9 @@ export interface HitAlertTelemetry {
 export interface RaceTelemetry {
   phase: GamePhase;
   courseId: CourseId;
+  speedClass: SpeedClass;
+  machineId: MachineId;
+  machineName: string;
   countdownValue: number; // 3, 2, 1, 0 (GO)
   speedKmh: number;
   isAccelerating: boolean;
@@ -315,10 +318,12 @@ export interface RaceTelemetry {
   lap: number;
   totalLaps: number;
   currentLapMs: number;
+  lapTimesMs: number[];
   bestLapMs: number | null;
   totalRaceMs: number;
   allTimeBestLapMs: number | null;
   isNewRecord: boolean;
+  rankingPlacement: number | null;
   markers: MinimapMarker[];
   standings: RacerStanding[];
   wrongWay: boolean;
