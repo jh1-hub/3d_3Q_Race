@@ -3,7 +3,7 @@ export type RaceBgmId =
   | 'neo-tokyo-sprint'
   | 'neon-overdrive'
   | 'velocity-peak'
-  | 'kokuyouryou-no-uta';
+  | 'kiokuyouryou-no-uta';
 
 export type RaceBgmSelection = 'random' | RaceBgmId;
 
@@ -43,10 +43,10 @@ export const RACE_BGM_TRACKS: RaceBgmTrackMeta[] = [
     url: '/bgm/Velocity Peak.mp3',
   },
   {
-    id: 'kokuyouryou-no-uta',
-    title: 'kokuyouryou_no_uta',
-    fileName: 'kokuyouryou_no_uta.mp3',
-    url: '/bgm/kokuyouryou_no_uta.mp3',
+    id: 'kiokuyouryou-no-uta',
+    title: '記憶容量と処理速度のうた',
+    fileName: 'kiokuyouryou_no_uta.mp3',
+    url: '/bgm/kiokuyouryou_no_uta.mp3',
   },
 ];
 
@@ -73,13 +73,17 @@ export function loadGameSettings(): GameSettings {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw) as Partial<GameSettings>;
+    const rawRaceBgm =
+      (parsed.raceBgm as string | undefined) === 'kokuyouryou-no-uta'
+        ? 'kiokuyouryou-no-uta'
+        : parsed.raceBgm;
     return {
       bgmEnabled: typeof parsed.bgmEnabled === 'boolean' ? parsed.bgmEnabled : true,
       sfxEnabled: typeof parsed.sfxEnabled === 'boolean' ? parsed.sfxEnabled : true,
       masterMuted: typeof parsed.masterMuted === 'boolean' ? parsed.masterMuted : false,
       raceBgm:
-        parsed.raceBgm === 'random' || (typeof parsed.raceBgm === 'string' && VALID_TRACK_IDS.has(parsed.raceBgm))
-          ? (parsed.raceBgm as RaceBgmSelection)
+        rawRaceBgm === 'random' || (typeof rawRaceBgm === 'string' && VALID_TRACK_IDS.has(rawRaceBgm))
+          ? (rawRaceBgm as RaceBgmSelection)
           : 'random',
     };
   } catch {

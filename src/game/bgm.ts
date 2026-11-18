@@ -36,13 +36,15 @@ export class BgmManager {
     'neo-tokyo-sprint': 'idle',
     'neon-overdrive': 'idle',
     'velocity-peak': 'idle',
-    'kokuyouryou-no-uta': 'idle',
+    'kiokuyouryou-no-uta': 'idle',
   };
 
   private raceSource: AudioBufferSourceNode | null = null;
   private activeRaceTrackId: RaceBgmId | null = null;
   private lastPlayedTrackId: RaceBgmId | null = null;
   private upcomingRandomTrackId: RaceBgmId;
+  private isPreviewing = false;
+  private previewToken = 0;
   private listeners = new Set<(snap: BgmSnapshot) => void>();
   private unlockAttached = false;
 
@@ -93,11 +95,11 @@ export class BgmManager {
       if (!ctx) return;
       if (ctx.state === 'suspended') {
         void ctx.resume().then(() => {
-          if (this.currentMode === 'menu' && this.isAudible()) {
+          if (this.currentMode === 'menu' && this.isAudible() && !this.isPreviewing) {
             this.startMenuMidiPlayback();
           }
         });
-      } else if (this.currentMode === 'menu' && this.isAudible() && !this.midiPlayer?.isPlaying()) {
+      } else if (this.currentMode === 'menu' && this.isAudible() && !this.isPreviewing && !this.midiPlayer?.isPlaying()) {
         this.startMenuMidiPlayback();
       }
     };
@@ -184,7 +186,7 @@ export class BgmManager {
         this.midiError = null;
         this.midiPlayer?.setMidi(parsed);
         this.notify();
-        if (this.currentMode === 'menu' && this.isAudible() && this.ctx?.state === 'running') {
+        if (this.currentMode === 'menu' && this.isAudible() && !this.isPreviewing && this.ctx?.state === 'running') {
           this.startMenuMidiPlayback();
         }
         return parsed;
@@ -254,7 +256,7 @@ export class BgmManager {
   }
 
   private startMenuMidiPlayback(): void {
-    if (!this.isAudible() || this.currentMode !== 'menu') return;
+    if (!this.isAudible() || this.currentMode !== 'menu' || this.isPreviewing) return;
     const ctx = this.ensureContext();
     if (!ctx || ctx.state !== 'running') return;
     if (!this.midiParsed || !this.midiPlayer) return;
@@ -281,8 +283,82 @@ export class BgmManager {
     this.midiPlayer?.stop();
   }
 
+  public async previewSelection(selection: RaceBgmSelection): Promise<void> {
+    const token = ++this.previewToken;
+
+    if (selection === 'random') {
+      this.stopPreviewAndResumeMenu(selection);
+      return;
+    }
+
+    this.isPreviewing = true;
+    this.stopMenuMidi();
+    this.stopRaceSource();
+
+    const ctx = this.ensureContext();
+    if (ctx && ctx.state === 'suspended') {
+      try {
+        await ctx.resume();
+      } catch {
+        // Ignore resume failure
+      }
+    }
+
+    const buffer = await this.preloadRaceTrack(selection);
+
+    if (token !== this.previewToken || !this.isPreviewing || this.currentMode !== 'menu') {
+      return;
+    }
+
+    if (this.bgmEnabled && buffer && this.ctx && this.masterGain) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = buffer;
+      src.loop = true;
+      src.connect(this.masterGain);
+      src.start(0);
+      this.raceSource = src;
+      this.activeRaceTrackId = selection;
+      this.updateGain();
+    }
+    this.notify();
+  }
+
+  public stopPreviewAndResumeMenu(selection: RaceBgmSelection): void {
+    this.previewToken += 1;
+    const wasPreviewing = this.isPreviewing;
+    this.isPreviewing = false;
+
+    if (wasPreviewing || this.activeRaceTrackId !== null) {
+      this.stopRaceSource();
+    }
+
+    if (this.currentMode === 'menu') {
+      if (selection === 'random') {
+        void this.preloadRaceTrack(this.upcomingRandomTrackId);
+      } else {
+        void this.preloadRaceTrack(selection);
+      }
+
+      if (this.isAudible()) {
+        void this.preloadMenuMidi().then(() => {
+          if (this.currentMode === 'menu' && !this.isPreviewing && this.isAudible()) {
+            const ctx = this.ensureContext();
+            if (ctx && ctx.state === 'suspended') {
+              void ctx.resume().then(() => this.startMenuMidiPlayback()).catch(() => {});
+            } else {
+              this.startMenuMidiPlayback();
+            }
+          }
+        });
+      }
+    }
+    this.notify();
+  }
+
   public enterMenu(selection: RaceBgmSelection): void {
     this.currentMode = 'menu';
+    this.isPreviewing = false;
+    this.previewToken += 1;
     this.stopRaceSource();
 
     // Pre-pick and background-download the next random race track if needed
@@ -294,7 +370,7 @@ export class BgmManager {
     }
 
     void this.preloadMenuMidi().then(() => {
-      if (this.currentMode === 'menu' && this.isAudible()) {
+      if (this.currentMode === 'menu' && !this.isPreviewing && this.isAudible()) {
         const ctx = this.ensureContext();
         if (ctx && ctx.state === 'suspended') {
           void ctx.resume().then(() => this.startMenuMidiPlayback()).catch(() => {});
@@ -308,6 +384,8 @@ export class BgmManager {
 
   public async prepareAndStartRace(selection: RaceBgmSelection): Promise<void> {
     this.currentMode = 'race';
+    this.isPreviewing = false;
+    this.previewToken += 1;
     this.stopMenuMidi();
     this.stopRaceSource();
 
@@ -367,7 +445,11 @@ export class BgmManager {
       this.stopRaceSource();
     } else {
       if (this.currentMode === 'menu') {
-        this.enterMenu(selection);
+        if (this.isPreviewing && selection !== 'random') {
+          void this.previewSelection(selection);
+        } else {
+          this.enterMenu(selection);
+        }
       } else if (this.currentMode === 'race' && !this.raceSource) {
         void this.prepareAndStartRace(selection);
       }

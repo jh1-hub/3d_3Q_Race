@@ -287,7 +287,7 @@ export function RaceHud({
                 {telemetry.quizStreak >= 2 && (
                   <span className="text-amber-300 font-bold"> · {telemetry.quizStreak}連続</span>
                 )}
-                {' · '}獲得カード {telemetry.earnedCards.length}枚
+                {' · '}獲得パーツ {telemetry.earnedCards.length}個
               </span>
             </div>
 
@@ -395,7 +395,7 @@ export function RaceHud({
               {telemetry.countdownValue > 0 ? telemetry.countdownValue : 'GO'}
             </div>
             <p className="mt-2 text-xs tracking-widest text-slate-300">
-              自動アクセル · ← → / ドラッグでハンドル · 正答レーンでターボ＆カード獲得
+              自動アクセル · ← → / ドラッグでハンドル · 正答レーンでターボ＆パーツ獲得
             </p>
           </div>
         )}

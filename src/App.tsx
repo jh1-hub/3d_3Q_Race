@@ -89,7 +89,7 @@ export default function App() {
       'neo-tokyo-sprint': 'idle',
       'neon-overdrive': 'idle',
       'velocity-peak': 'idle',
-      'kokuyouryou-no-uta': 'idle',
+      'kiokuyouryou-no-uta': 'idle',
     },
     upcomingRandomTrackId: 'hyper-cyber-drive',
     activeRaceTrackId: null,
@@ -340,9 +340,14 @@ export default function App() {
     setSettings((prev) => {
       const next: GameSettings = { ...prev, raceBgm };
       saveGameSettings(next);
-      bgmRef.current?.preloadForSelection(raceBgm);
       return next;
     });
+    void bgmRef.current?.previewSelection(raceBgm);
+  }, []);
+
+  const handleCloseSettings = useCallback(() => {
+    setSettingsOpen(false);
+    bgmRef.current?.stopPreviewAndResumeMenu(settingsRef.current.raceBgm);
   }, []);
 
   const handleTogglePause = useCallback(() => {
@@ -418,7 +423,7 @@ export default function App() {
         bgmSnapshot={bgmSnapshot}
         initialCourse={selectedCourse}
         initialSpeedClass={speedClass}
-        onClose={() => setSettingsOpen(false)}
+        onClose={handleCloseSettings}
         onToggleBgm={handleToggleBgm}
         onToggleSfx={handleToggleSfx}
         onSelectRaceBgm={handleSelectRaceBgm}
