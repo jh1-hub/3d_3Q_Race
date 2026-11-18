@@ -6,7 +6,7 @@ export type SpeedClass = 'normal' | 'hard';
 
 export type CourseId = 'orbital' | 'oceanic' | 'lunar' | 'skycity';
 
-export type GamePhase = 'menu' | 'countdown' | 'racing' | 'paused' | 'finished';
+export type GamePhase = 'menu' | 'countdown' | 'racing' | 'paused' | 'finishing' | 'finished';
 
 export interface CourseSpec {
   id: CourseId;
@@ -260,6 +260,7 @@ export interface RacerStanding {
   isPlayer: boolean;
   rank: number;
   lap: number;
+  progressNorm: number;
   totalTimeMs: number;
   bestLapMs: number | null;
   accentHex: string;
@@ -304,6 +305,16 @@ export interface HitAlertTelemetry {
   remainingSec: number;
 }
 
+export interface MissedQuizReview {
+  termId: number;
+  termName: string;
+  chosenTermName: string;
+  questionText: string;
+  explanation: string;
+  subcategoryTitle: string;
+  rarity: 'C' | 'R' | 'SR' | 'UR';
+}
+
 export interface RaceTelemetry {
   phase: GamePhase;
   courseId: CourseId;
@@ -328,6 +339,7 @@ export interface RaceTelemetry {
   standings: RacerStanding[];
   wrongWay: boolean;
   heldItem: SubItemType | null;
+  heldItemRemainingSec: number;
   shieldActive: boolean;
   glowActive?: boolean;
   hoverActive?: boolean;
@@ -338,6 +350,9 @@ export interface RaceTelemetry {
   activeQuiz: ActiveQuizTelemetry | null;
   quizFeedback: QuizFeedbackTelemetry | null;
   earnedCards: EarnedRaceCard[];
+  missedQuestions: MissedQuizReview[];
   quizAttempts: number;
   quizCorrectCount: number;
+  quizStreak: number;
+  bestQuizStreak: number;
 }

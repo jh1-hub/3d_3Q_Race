@@ -93,6 +93,7 @@ export function RaceHud({
   }, [minimapPoints]);
 
   const isActiveRace = telemetry.phase === 'racing' || telemetry.phase === 'countdown';
+  const isFinishing = telemetry.phase === 'finishing';
   const stopProp = (e: React.PointerEvent) => e.stopPropagation();
   const heldMeta = telemetry.heldItem ? SUB_ITEMS[telemetry.heldItem] : null;
   const activeQuiz = telemetry.activeQuiz;
@@ -183,7 +184,7 @@ export function RaceHud({
             onPointerDown={stopProp}
             onClick={onUseSubItem}
             disabled={!heldMeta}
-            className={`pointer-events-auto flex items-center gap-2.5 rounded-xl border px-3 py-1.5 sm:py-2 text-left shadow-lg transition-transform ${
+            className={`pointer-events-auto relative overflow-hidden flex items-center gap-2.5 rounded-xl border px-3 py-1.5 sm:py-2 text-left shadow-lg transition-transform ${
               heldMeta
                 ? 'bg-[#081020]/95 hover:scale-[1.03] active:scale-95 cursor-pointer'
                 : 'border-white/10 bg-[#070b14]/82 opacity-80 cursor-default'
@@ -196,7 +197,7 @@ export function RaceHud({
                   }
                 : undefined
             }
-            title="アイテムを使用 (タップ / クリック / E / Space / 上下フリック)"
+            title="アイテムを使用 (タップ / クリック / ↑ / ↓ / E / Space / 上下フリック)"
           >
             <div
               className="flex h-7 w-7 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-lg border bg-slate-950/90"
@@ -209,13 +210,27 @@ export function RaceHud({
               )}
             </div>
             <div className="flex flex-col leading-tight">
-              <span className="text-[10px] font-semibold tracking-wider text-slate-400 whitespace-nowrap">
-                {heldMeta ? 'ITEM · タップで使用' : telemetry.shieldActive ? 'SHIELD ACTIVE' : 'ITEM SLOT'}
+              <span className="font-mono-num text-[10px] font-semibold tracking-wider text-slate-400 whitespace-nowrap">
+                {heldMeta
+                  ? `ITEM · ${Math.max(1, Math.ceil(telemetry.heldItemRemainingSec))}s`
+                  : telemetry.shieldActive
+                    ? 'SHIELD ACTIVE'
+                    : 'ITEM SLOT'}
               </span>
               <span className="font-display text-xs sm:text-sm font-bold text-white whitespace-nowrap">
                 {heldMeta ? heldMeta.name : telemetry.shieldActive ? 'Aegis Shield' : 'No Item'}
               </span>
             </div>
+            {heldMeta && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute bottom-0 left-0 h-0.5 transition-all duration-100"
+                style={{
+                  width: `${Math.max(0, Math.min(100, (telemetry.heldItemRemainingSec / 8) * 100))}%`,
+                  backgroundColor: heldMeta.accentHex,
+                }}
+              />
+            )}
           </button>
         </div>
 
@@ -268,7 +283,11 @@ export function RaceHud({
                 QUIZ GATE · あと {Math.max(1, Math.ceil(activeQuiz.etaSeconds))}秒
               </span>
               <span className="text-slate-400">
-                正答 {telemetry.quizCorrectCount} · 獲得カード {telemetry.earnedCards.length}枚
+                正答 {telemetry.quizCorrectCount}
+                {telemetry.quizStreak >= 2 && (
+                  <span className="text-amber-300 font-bold"> · {telemetry.quizStreak}連続</span>
+                )}
+                {' · '}獲得カード {telemetry.earnedCards.length}枚
               </span>
             </div>
 
@@ -368,7 +387,7 @@ export function RaceHud({
         )}
       </div>
 
-      {/* Center Status Prompts (Countdown or Pause Modal) */}
+      {/* Center Status Prompts (Countdown, Finishing Celebration, or Pause Modal) */}
       <div className="flex flex-1 items-center justify-center">
         {telemetry.phase === 'countdown' && (
           <div className="text-center">
@@ -381,9 +400,14 @@ export function RaceHud({
           </div>
         )}
 
-        {telemetry.phase === 'racing' && telemetry.wrongWay && (
-          <div className="rounded-lg border border-red-500/40 bg-[#0f060a]/90 px-4 py-2 text-sm font-bold tracking-wider text-red-400">
-            逆走警告 · REVERSE
+        {isFinishing && (
+          <div className="text-center">
+            <div className="font-display text-6xl sm:text-7xl font-bold tracking-wider text-amber-300 drop-shadow-[0_6px_28px_rgba(251,191,36,0.6)]">
+              FINISH!
+            </div>
+            <div className="mt-1.5 font-display text-xl sm:text-2xl font-bold tracking-wide text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.8)]">
+              {telemetry.rank === 1 ? '1ST PLACE · VICTORY' : `${telemetry.rank}位 フィニッシュ`}
+            </div>
           </div>
         )}
 
@@ -428,9 +452,9 @@ export function RaceHud({
       </div>
 
       {/* Collapsible Minimal Bottom Speed & Utility Dock */}
-      <div className="flex flex-col items-center gap-2">
+      <div className="flex flex-col items-center gap-1.5">
         {/* Persistent Wrong-Answer Review Banner (visible even while next question is shown) */}
-        {quizFeedback && !quizFeedback.correct && (
+        {!isFinishing && quizFeedback && !quizFeedback.correct && (
           <div className="flex max-w-[min(94vw,36rem)] items-center gap-2.5 rounded-xl border border-red-400/55 bg-[#1a060a]/94 px-4 py-2 text-xs sm:text-sm font-bold text-red-200 shadow-xl">
             <XCircle className="h-4.5 w-4.5 shrink-0 text-red-400" />
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -440,6 +464,43 @@ export function RaceHud({
                 正解は「<span className="text-amber-300">{quizFeedback.termName}</span>」
               </span>
             </div>
+          </div>
+        )}
+
+        {/* Mobile Portrait Compact Race Progress / Standings Bar (< sm) */}
+        {isActiveRace && telemetry.standings.length > 0 && (
+          <div className="sm:hidden flex w-[min(92vw,22rem)] items-center gap-2 rounded-lg border border-white/10 bg-[#070b14]/86 px-2.5 py-1.5 shadow-md">
+            <span className="font-mono-num text-[10px] font-bold text-slate-400 shrink-0">
+              L{telemetry.lap}/{telemetry.totalLaps}
+            </span>
+            <div className="relative h-2 flex-1 rounded-full bg-slate-800/95">
+              <div
+                className="absolute inset-y-0 left-0 rounded-full bg-cyan-500/25"
+                style={{
+                  width: `${Math.round((telemetry.standings.find((s) => s.isPlayer)?.progressNorm ?? 0) * 100)}%`,
+                }}
+              />
+              {/* Lap division ticks */}
+              <span className="pointer-events-none absolute top-0 bottom-0 left-1/3 w-px bg-white/15" />
+              <span className="pointer-events-none absolute top-0 bottom-0 left-2/3 w-px bg-white/15" />
+              {telemetry.standings.map((s) => (
+                <span
+                  key={s.id}
+                  className={`absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full transition-all duration-100 ${
+                    s.isPlayer
+                      ? 'z-10 h-3 w-3 border-2 border-white shadow-[0_0_8px_rgba(34,211,238,0.85)]'
+                      : 'h-2 w-2 border border-[#05070e]'
+                  }`}
+                  style={{
+                    left: `${Math.max(2, Math.min(98, s.progressNorm * 100))}%`,
+                    backgroundColor: s.isPlayer ? '#22d3ee' : s.accentHex,
+                  }}
+                />
+              ))}
+            </div>
+            <span className="font-mono-num text-[10px] font-bold text-cyan-300 shrink-0">
+              {telemetry.rank}位
+            </span>
           </div>
         )}
 

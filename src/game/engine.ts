@@ -19,6 +19,7 @@ import {
   MachineId,
   MachineSpec,
   MinimapMarker,
+  MissedQuizReview,
   QuizFeedbackTelemetry,
   RacerStanding,
   RaceTelemetry,
@@ -78,7 +79,6 @@ interface RacerState {
 }
 
 export interface TouchInputState {
-  brake: boolean;
   steerAnalog: number; // -1 (right) .. +1 (left)
 }
 
@@ -176,11 +176,11 @@ export class RaceEngine {
 
   private keys: Record<string, boolean> = {};
   private touchInput: TouchInputState = {
-    brake: false,
     steerAnalog: 0,
   };
 
   private countdownTimer = 0;
+  private finishCelebrationTimer = 0;
   private lastBeepStep = 4;
   private raceElapsedMs = 0;
   private totalElapsedSec = 0;
@@ -201,12 +201,16 @@ export class RaceEngine {
   private hudEmitAccum = 0;
 
   private nextQuizRowIndex = 0;
+  private quizGatesCleared = 0;
   private activeQuiz: GeneratedQuiz | null = null;
   private quizLanesRevealed = false;
   private usedTermIds = new Set<number>();
   private earnedCards: EarnedRaceCard[] = [];
+  private missedQuestions: MissedQuizReview[] = [];
   private quizAttempts = 0;
   private quizCorrectCount = 0;
+  private quizStreak = 0;
+  private bestQuizStreak = 0;
   private quizFeedback: QuizFeedbackTelemetry | null = null;
   private quizFeedbackTimer = 0;
   private assistedLaneIndex: number | null = null;
@@ -435,6 +439,7 @@ export class RaceEngine {
     this.resetGridPositions();
     this.phase = 'countdown';
     this.countdownTimer = 3.2;
+    this.finishCelebrationTimer = 0;
     this.lastBeepStep = 4;
     this.raceElapsedMs = 0;
     this.eventNotice = null;
@@ -446,12 +451,16 @@ export class RaceEngine {
     this.camInitialized = false;
 
     this.nextQuizRowIndex = 0;
+    this.quizGatesCleared = 0;
     this.activeQuiz = null;
     this.quizLanesRevealed = false;
     this.usedTermIds.clear();
     this.earnedCards = [];
+    this.missedQuestions = [];
     this.quizAttempts = 0;
     this.quizCorrectCount = 0;
+    this.quizStreak = 0;
+    this.bestQuizStreak = 0;
     this.quizFeedback = null;
     this.quizFeedbackTimer = 0;
     this.assistedLaneIndex = null;
@@ -472,6 +481,7 @@ export class RaceEngine {
 
   public returnToMenu(): void {
     this.phase = 'menu';
+    this.finishCelebrationTimer = 0;
     this.audio.updateEngine(0, false, false);
     this.itemSystem.resetDynamicHazards();
     this.buildRacers();
@@ -480,8 +490,12 @@ export class RaceEngine {
     this.hitAlertSource = null;
     this.hitAlertTimer = 0;
     this.rankingPlacement = null;
+    this.quizGatesCleared = 0;
     this.activeQuiz = null;
     this.quizLanesRevealed = false;
+    this.missedQuestions = [];
+    this.quizStreak = 0;
+    this.bestQuizStreak = 0;
     this.quizFeedback = null;
     this.quizFeedbackTimer = 0;
     this.assistedLaneIndex = null;
@@ -739,7 +753,21 @@ export class RaceEngine {
 
   private handleKeyDown = (e: KeyboardEvent): void => {
     this.keys[e.code] = true;
-    if ((e.code === 'KeyE' || e.code === 'KeyF' || e.code === 'Space' || e.code === 'Enter') && !e.repeat) {
+    if (
+      (e.code === 'ArrowUp' || e.code === 'ArrowDown' || e.code === 'Space') &&
+      (this.phase === 'racing' || this.phase === 'countdown')
+    ) {
+      e.preventDefault();
+    }
+    if (
+      (e.code === 'KeyE' ||
+        e.code === 'KeyF' ||
+        e.code === 'Space' ||
+        e.code === 'Enter' ||
+        e.code === 'ArrowUp' ||
+        e.code === 'ArrowDown') &&
+      !e.repeat
+    ) {
       this.usePlayerSubItem();
     }
     if (!e.repeat && this.activeQuiz && this.quizLanesRevealed) {
@@ -871,10 +899,18 @@ export class RaceEngine {
       return;
     }
 
-    // Active Racing or Finished (auto-pilot cooldown)
+    // Active Racing, Post-Finish Celebration, or Finished (auto-pilot cooldown)
     if (this.phase === 'racing') {
       this.raceElapsedMs += dt * 1000;
       this.updateQuizSchedule();
+    } else if (this.phase === 'finishing') {
+      this.finishCelebrationTimer -= dt;
+      if (this.finishCelebrationTimer <= 0) {
+        this.finishCelebrationTimer = 0;
+        this.phase = 'finished';
+        this.audio.updateEngine(0, false, false);
+        this.emitTelemetry();
+      }
     }
 
     const classMultiplier = this.speedClass === 'hard' ? 1.10 : 1.0;
@@ -931,7 +967,7 @@ export class RaceEngine {
       this.syncRacerVisual(
         r,
         dt,
-        r.isPlayer ? playerAccelerating : r.accelSurgeTimer > 0 || r.glowBoostTimer > 0
+        r.isPlayer ? playerAccelerating || this.phase === 'finishing' : r.accelSurgeTimer > 0 || r.glowBoostTimer > 0
       );
     }
 
@@ -949,13 +985,17 @@ export class RaceEngine {
     this.keyLight.target.position.copy(this.playerRacer.pos);
 
     // Stream speed dust particles relative to camera
-    this.dustMat.size = playerAccelerating ? 1.18 : 0.75;
+    this.dustMat.size = playerAccelerating || this.phase === 'finishing' ? 1.18 : 0.75;
     this.updateSpeedDust();
 
     // Camera & Audio
-    this.updateRaceCamera(dt, playerAccelerating);
+    this.updateRaceCamera(dt, playerAccelerating || this.phase === 'finishing');
     const speedNorm = this.playerRacer.speed / ((spec.maxSpeedKmh / 3.6) * classMultiplier);
-    this.audio.updateEngine(speedNorm, playerAccelerating, this.phase === 'racing');
+    this.audio.updateEngine(
+      this.phase === 'finishing' ? speedNorm * 0.55 : speedNorm,
+      playerAccelerating,
+      this.phase === 'racing' || this.phase === 'finishing'
+    );
 
     // Emit HUD state at ~20Hz for crisp React UI without frame drops
     this.hudEmitAccum += dt;
@@ -971,11 +1011,6 @@ export class RaceEngine {
     spec: MachineSpec,
     classMultiplier: number
   ): boolean {
-    // Auto-throttle unless braking
-    const brakeInput =
-      this.keys['KeyS'] || this.keys['ArrowDown'] || this.touchInput.brake ? 1 : 0;
-    const accelInput = brakeInput > 0 ? 0 : 1;
-
     const keySteer =
       (this.keys['KeyA'] || this.keys['ArrowLeft'] ? 1 : 0) -
       (this.keys['KeyD'] || this.keys['ArrowRight'] ? 1 : 0);
@@ -997,17 +1032,10 @@ export class RaceEngine {
     const activeMaxSpeed =
       baseMaxSpeed * hitPenalty * shieldBonus * Math.max(turboSpeedMult, glowBonus) * hoverBonus;
     const accelRate = 48 * spec.accel * classMultiplier * turboAccelMult * penaltyAccelMult;
-    const brakeRate = 68;
 
-    if (accelInput > 0) {
-      r.speed += accelRate * dt;
-    } else if (brakeInput > 0) {
-      r.speed -= brakeRate * dt;
-    } else {
-      r.speed = THREE.MathUtils.damp(r.speed, 0, 0.75, dt);
-    }
-
-    r.speed = THREE.MathUtils.clamp(r.speed, -15, activeMaxSpeed);
+    // Pure auto-throttle racing (no brake)
+    r.speed += accelRate * dt;
+    r.speed = THREE.MathUtils.clamp(r.speed, 0, activeMaxSpeed);
     if (r.speed > activeMaxSpeed) {
       r.speed = THREE.MathUtils.damp(r.speed, activeMaxSpeed, 3.2, dt);
     }
@@ -1071,7 +1099,7 @@ export class RaceEngine {
 
     // Visual roll & pitch damping (bounded so wing/pods stay well above track)
     const targetRoll = -steer * 0.16 * speedRatio;
-    const targetPitch = (accelInput > 0 || accelerating ? -0.04 : brakeInput > 0 ? 0.05 : 0);
+    const targetPitch = accelerating ? -0.045 : -0.015;
     r.rollVisual = THREE.MathUtils.damp(r.rollVisual, targetRoll, 9, dt);
     r.pitchVisual = THREE.MathUtils.damp(r.pitchVisual, targetPitch, 8, dt);
 
@@ -1141,7 +1169,11 @@ export class RaceEngine {
       r.aiBaseSpeedFactor *
       finalLapEase *
       (r.hitSpinTimer > 0 ? 0.50 : 1.0) *
-      (this.phase === 'finished' && r.isPlayer ? 0.72 : rubberBand) *
+      (r.isPlayer && this.phase === 'finishing'
+        ? 0.94
+        : r.isPlayer && this.phase === 'finished'
+          ? 0.72
+          : rubberBand) *
       (r.accelSurgeTimer > 0 ? 1.2 : 1.0) *
       glowMult *
       hoverMult;
@@ -1262,7 +1294,8 @@ export class RaceEngine {
   }
 
   private updateQuizSchedule(): void {
-    if (this.playerRacer.finished) {
+    const totalRaceGates = TOTAL_LAPS * this.itemSystem.rows.length;
+    if (this.playerRacer.finished || this.quizGatesCleared >= totalRaceGates) {
       if (this.activeQuiz) {
         this.activeQuiz = null;
         this.quizLanesRevealed = false;
@@ -1373,6 +1406,11 @@ export class RaceEngine {
 
     if (choice.isCorrect) {
       this.quizCorrectCount += 1;
+      this.quizStreak += 1;
+      if (this.quizStreak > this.bestQuizStreak) {
+        this.bestQuizStreak = this.quizStreak;
+      }
+
       const targetMeta = quiz.targetTerm;
       const { isNew, count } = recordCollectedCard(targetMeta.term.id);
       this.earnedCards.push({
@@ -1386,15 +1424,23 @@ export class RaceEngine {
       });
       this.onCollectionChange?.();
 
-      // Correct answer: clear any lingering quiz drag, grant stronger Turbo boost AND the lane's item
+      // Correct answer: clear any lingering quiz drag, grant stronger Turbo boost + streak bonus AND the lane's item
       r.quizPenaltyTimer = 0;
       const classMultiplier = this.speedClass === 'hard' ? 1.10 : 1.0;
       const baseMax = (this.getSelectedSpec().maxSpeedKmh / 3.6) * classMultiplier;
-      r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 3.2 * r.itemPower);
-      r.speed = Math.max(r.speed, baseMax * (choice.itemKind === 'boost' ? 1.42 : 1.24));
+      const streakExtraSec = Math.min(1.4, Math.max(0, (this.quizStreak - 1) * 0.35));
+      r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 3.2 * r.itemPower + streakExtraSec);
+      r.speed = Math.max(
+        r.speed,
+        baseMax * (choice.itemKind === 'boost' ? 1.42 : this.quizStreak >= 3 ? 1.32 : 1.24)
+      );
 
-      if (choice.itemKind === 'boost') {
-        r.superTurboTimer = Math.max(r.superTurboTimer, 3.6 * r.itemPower);
+      if (choice.itemKind === 'boost' || this.quizStreak >= 3) {
+        const streakTurbo = this.quizStreak >= 3 ? 1.5 + Math.min(1.2, (this.quizStreak - 3) * 0.4) : 0;
+        r.superTurboTimer = Math.max(
+          r.superTurboTimer,
+          choice.itemKind === 'boost' ? 3.6 * r.itemPower : streakTurbo
+        );
         r.accelSurgeTimer = Math.max(r.accelSurgeTimer, 4.0 * r.itemPower);
       }
 
@@ -1411,28 +1457,40 @@ export class RaceEngine {
         r.pos,
         _sample.tangent,
         _sample.up,
-        choice.itemKind === 'boost' ? 0xf59e0b : 0x22d3ee,
-        choice.itemKind === 'boost'
+        choice.itemKind === 'boost' || this.quizStreak >= 3 ? 0xf59e0b : 0x22d3ee,
+        choice.itemKind === 'boost' || this.quizStreak >= 3
       );
 
+      const streakTag = this.quizStreak >= 2 ? ` · ${this.quizStreak}連続正解!` : '';
       if (choice.itemKind === 'boost') {
         this.quizFeedback = {
           correct: true,
           termName: choice.term.name,
-          message: `正解！「${choice.term.name}」獲得 · HYPER TURBO発動！`,
+          message: `正解！「${choice.term.name}」獲得 · HYPER TURBO発動！${streakTag}`,
         };
-        this.pushEventNotice(`正解！「${choice.term.name}」パーツ獲得 + HYPER TURBO!`);
+        this.pushEventNotice(`正解！「${choice.term.name}」パーツ獲得 + HYPER TURBO!${streakTag}`);
       } else {
         this.quizFeedback = {
           correct: true,
           termName: choice.term.name,
-          message: `正解！ターボ加速 + ${SUB_ITEMS[choice.itemKind].name}獲得`,
+          message: `正解！ターボ加速 + ${SUB_ITEMS[choice.itemKind].name}獲得${streakTag}`,
         };
-        this.pushEventNotice(`正解！「${choice.term.name}」パーツ獲得 + ${SUB_ITEMS[choice.itemKind].name}`);
+        this.pushEventNotice(`正解！「${choice.term.name}」パーツ獲得 + ${SUB_ITEMS[choice.itemKind].name}${streakTag}`);
       }
       this.quizFeedbackTimer = 3.2;
     } else {
-      // Wrong answer: stronger spin out + lingering engine stall so repeated misses cannot be erased easily
+      // Wrong answer: reset streak, record review entry, stronger spin out + lingering engine stall
+      this.quizStreak = 0;
+      this.missedQuestions.push({
+        termId: quiz.targetTerm.term.id,
+        termName: correctChoice.term.name,
+        chosenTermName: choice.term.name,
+        questionText: quiz.questionText,
+        explanation: quiz.targetTerm.term.descriptions[0] ?? '',
+        subcategoryTitle: quiz.targetTerm.subcategoryTitle,
+        rarity: quiz.targetTerm.term.rarity,
+      });
+
       r.hitSpinTimer = 2.2;
       r.quizPenaltyTimer = 4.5;
       r.speed *= 0.28;
@@ -1456,6 +1514,7 @@ export class RaceEngine {
     this.activeQuiz = null;
     this.quizLanesRevealed = false;
     this.assistedLaneIndex = null;
+    this.quizGatesCleared += 1;
     this.nextQuizRowIndex = (this.nextQuizRowIndex + 1) % this.itemSystem.rows.length;
     this.emitTelemetry();
   }
@@ -1526,9 +1585,6 @@ export class RaceEngine {
           bestAhead = diff;
           target = other;
         }
-      }
-      if (!target) {
-        target = this.racers.find((o) => o.id !== r.id) ?? null;
       }
       const spawnS = (((r.s + 3.2 / this.track.totalLength) % 1) + 1) % 1;
       const spreadOffsets = enhanced ? [-7.2, -3.6, 0, 3.6, 7.2] : [-4.4, 0, 4.4];
@@ -1855,7 +1911,17 @@ export class RaceEngine {
         r.finished = true;
         r.finishTimeMs = this.raceElapsedMs;
         if (r.isPlayer) {
-          this.phase = 'finished';
+          this.phase = 'finishing';
+          this.finishCelebrationTimer = 1.25;
+          this.activeQuiz = null;
+          this.quizLanesRevealed = false;
+          this.hitAlertSource = null;
+          this.hitAlertTimer = 0;
+
+          this.track.sampleAtS(r.s, _sample);
+          this.itemSystem.spawnDashRings(r.pos, _sample.tangent, _sample.up, 0x22d3ee, true);
+          this.itemSystem.spawnShockwave(r.pos, _sample.up, 0xfbbf24, 18, 0.7);
+
           const playerRank = this.getRacerRank(r);
           const { placedRank } = recordTotalTimeRanking({
             courseId: this.courseId,
@@ -1869,7 +1935,7 @@ export class RaceEngine {
           });
           this.rankingPlacement = placedRank;
           this.audio.playLapComplete(true);
-          this.emitTelemetry();
+          this.emitTelemetry(true);
         }
       } else {
         r.lap += 1;
@@ -2050,11 +2116,17 @@ export class RaceEngine {
     // Up vector of track/car (+Y local -> world)
     _vB.set(0, 1, 0).applyQuaternion(r.headingQuat).normalize();
 
-    const backDist = 9.4;
-    const heightDist = 3.85;
+    const isFinishSweep = this.phase === 'finishing' || this.phase === 'finished';
+    const backDist = isFinishSweep ? 11.4 : 9.4;
+    const heightDist = isFinishSweep ? 4.4 : 3.85;
     const lookAhead = 18;
 
     _vC.copy(r.pos).addScaledVector(_vA, -backDist).addScaledVector(_vB, heightDist);
+    if (isFinishSweep) {
+      // Gentle cinematic lateral offset on finish victory lap
+      _vLeft.crossVectors(_vB, _vA).normalize();
+      _vC.addScaledVector(_vLeft, 3.6);
+    }
     _vD.copy(r.pos).addScaledVector(_vA, lookAhead).addScaledVector(_vB, 1.25);
 
     if (!this.camInitialized) {
@@ -2116,6 +2188,9 @@ export class RaceEngine {
       isPlayer: r.isPlayer,
       rank: i + 1,
       lap: Math.min(r.lap, TOTAL_LAPS),
+      progressNorm: r.finished
+        ? 1
+        : THREE.MathUtils.clamp(this.getTotalProgress(r) / TOTAL_LAPS, 0, 0.999),
       totalTimeMs: r.finished ? r.finishTimeMs : this.raceElapsedMs,
       bestLapMs: r.bestLapMs,
       accentHex: r.accentHex,
@@ -2201,8 +2276,11 @@ export class RaceEngine {
       rankingPlacement: this.rankingPlacement,
       markers,
       standings,
-      wrongWay: this.playerRacer.speed < -5,
+      wrongWay: false,
       heldItem: this.playerRacer.heldItem,
+      heldItemRemainingSec: this.playerRacer.heldItem
+        ? Math.max(0, 8.0 - this.playerRacer.heldItemHoldTime)
+        : 0,
       shieldActive: this.playerRacer.shieldTimer > 0,
       glowActive: this.playerRacer.glowBoostTimer > 0,
       hoverActive: this.playerRacer.hoverGlideTimer > 0,
@@ -2213,8 +2291,11 @@ export class RaceEngine {
       activeQuiz: activeQuizTelemetry,
       quizFeedback: this.quizFeedback,
       earnedCards: [...this.earnedCards],
+      missedQuestions: [...this.missedQuestions],
       quizAttempts: this.quizAttempts,
       quizCorrectCount: this.quizCorrectCount,
+      quizStreak: this.quizStreak,
+      bestQuizStreak: this.bestQuizStreak,
     });
   }
 

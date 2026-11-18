@@ -1,5 +1,17 @@
 import { useState } from 'react';
-import { Car, Cpu, Loader2, MapPin, Play, RotateCcw, Settings, Trophy } from 'lucide-react';
+import {
+  Car,
+  CheckCircle2,
+  Cpu,
+  Loader2,
+  MapPin,
+  Play,
+  RotateCcw,
+  Settings,
+  Trophy,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import {
   CourseId,
   COURSES,
@@ -20,6 +32,7 @@ interface MenuOverlayProps {
   speedClass: SpeedClass;
   collection: CardCollectionMap;
   bgmPreparing: boolean;
+  soundMuted: boolean;
   onSelectCourse: (id: CourseId) => void;
   onSelectMachine: (id: MachineId) => void;
   onSelectClass: (cls: SpeedClass) => void;
@@ -27,6 +40,7 @@ interface MenuOverlayProps {
   onReturnMenu: () => void;
   onOpenCollection: () => void;
   onOpenSettings: () => void;
+  onToggleSound: () => void;
 }
 
 export function MenuOverlay({
@@ -36,6 +50,7 @@ export function MenuOverlay({
   speedClass,
   collection,
   bgmPreparing,
+  soundMuted,
   onSelectCourse,
   onSelectMachine,
   onSelectClass,
@@ -43,6 +58,7 @@ export function MenuOverlay({
   onReturnMenu,
   onOpenCollection,
   onOpenSettings,
+  onToggleSound,
 }: MenuOverlayProps) {
   const [mobileTab, setMobileTab] = useState<'course' | 'machine'>('course');
 
@@ -55,7 +71,7 @@ export function MenuOverlay({
     const minLapMs =
       telemetry.lapTimesMs.length > 0 ? Math.min(...telemetry.lapTimesMs) : null;
     return (
-      <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center bg-[#05070e]/78 p-3 sm:p-4 overflow-y-auto">
+      <div className="pointer-events-auto fixed inset-0 z-20 flex items-start sm:items-center justify-center bg-[#05070e]/78 p-3 sm:p-4 overflow-y-auto">
         <div className="w-full max-w-2xl rounded-2xl border border-white/15 bg-[#070b14]/96 p-4 sm:p-6 shadow-2xl my-auto">
           <div className="flex items-center justify-between border-b border-white/10 pb-3.5 sm:pb-4">
             <div className="min-w-0">
@@ -97,7 +113,14 @@ export function MenuOverlay({
               </div>
             </div>
             <div className="rounded-xl border border-white/10 bg-slate-900/70 p-2.5 sm:p-3">
-              <div className="text-[10px] sm:text-[11px] text-slate-400">クイズ正答</div>
+              <div className="flex items-center justify-between text-[10px] sm:text-[11px] text-slate-400">
+                <span>クイズ正答</span>
+                {telemetry.bestQuizStreak >= 2 && (
+                  <span className="font-mono-num font-bold text-amber-300">
+                    {telemetry.bestQuizStreak}連続
+                  </span>
+                )}
+              </div>
               <div className="mt-1 font-mono-num text-sm sm:text-xl font-bold text-emerald-400">
                 {telemetry.quizCorrectCount} / {telemetry.quizAttempts}
               </div>
@@ -224,6 +247,43 @@ export function MenuOverlay({
             </div>
           </div>
 
+          {/* Post-Race Wrong-Answer Review List */}
+          {telemetry.missedQuestions.length > 0 ? (
+            <div className="mt-3.5 rounded-xl border border-red-400/25 bg-[#12070b]/80 p-3">
+              <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-red-200">
+                <span>間違い復習リスト ({telemetry.missedQuestions.length}問)</span>
+                <span className="text-slate-400">次回のHARD対策に活用</span>
+              </div>
+              <div className="max-h-40 space-y-2 overflow-y-auto pr-1">
+                {telemetry.missedQuestions.map((miss, idx) => (
+                  <div
+                    key={`${miss.termId}-${idx}`}
+                    className="rounded-lg border border-white/10 bg-slate-950/75 p-2.5 text-xs"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5">
+                      <span className="font-display font-bold text-amber-300">
+                        正解: {miss.termName}
+                      </span>
+                      <span className="text-[11px] text-red-300">
+                        選択: {miss.chosenTermName}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+                      {miss.explanation}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            telemetry.quizAttempts > 0 && (
+              <div className="mt-3.5 flex items-center justify-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300">
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                <span>ミスなし！出題された全問に正解しました</span>
+              </div>
+            )
+          )}
+
           <div className="mt-4 sm:mt-5 flex flex-wrap items-center gap-2.5 sm:gap-3">
             <button
               type="button"
@@ -283,11 +343,11 @@ export function MenuOverlay({
           </p>
         </div>
 
-        <div className="pointer-events-auto flex items-center gap-2 shrink-0">
+        <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2 shrink-0">
           <button
             type="button"
             onClick={onOpenCollection}
-            className="flex min-h-[44px] items-center gap-2 rounded-xl border border-amber-400/35 bg-[#070b14]/92 px-3 py-1.5 sm:px-3.5 sm:py-2 text-left transition-colors hover:border-amber-300 hover:bg-amber-500/10 cursor-pointer whitespace-nowrap shrink-0"
+            className="flex min-h-[44px] items-center gap-1.5 sm:gap-2 rounded-xl border border-amber-400/35 bg-[#070b14]/92 px-2.5 py-1.5 sm:px-3.5 sm:py-2 text-left transition-colors hover:border-amber-300 hover:bg-amber-500/10 cursor-pointer whitespace-nowrap shrink-0"
           >
             <Cpu className="h-4 w-4 sm:h-4.5 sm:w-4.5 text-amber-400 shrink-0" />
             <div>
@@ -311,12 +371,30 @@ export function MenuOverlay({
 
           <button
             type="button"
-            onClick={onOpenSettings}
-            aria-label="設定とランキング"
-            className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-[#070b14]/92 px-3 py-2 text-xs font-semibold text-slate-200 transition-colors hover:border-cyan-400/60 hover:text-white cursor-pointer whitespace-nowrap shrink-0"
+            onClick={onToggleSound}
+            aria-label={soundMuted ? 'サウンドをオンにする' : 'サウンドをオフにする'}
+            title={soundMuted ? 'サウンド OFF（タップでON）' : 'サウンド ON（タップでOFF）'}
+            className={`flex h-11 w-11 items-center justify-center rounded-xl border transition-colors cursor-pointer shrink-0 ${
+              soundMuted
+                ? 'border-white/12 bg-[#070b14]/92 text-slate-500 hover:text-slate-300'
+                : 'border-cyan-400/45 bg-[#070b14]/92 text-cyan-400 hover:border-cyan-300'
+            }`}
           >
-            <Settings className="h-4 w-4 text-cyan-400 shrink-0" />
-            <span className="hidden sm:inline">設定</span>
+            {soundMuted ? (
+              <VolumeX className="h-4.5 w-4.5" />
+            ) : (
+              <Volume2 className="h-4.5 w-4.5" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            aria-label="設定"
+            title="設定・ランキング"
+            className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/15 bg-[#070b14]/92 text-slate-200 transition-colors hover:border-cyan-400/60 hover:text-white cursor-pointer shrink-0"
+          >
+            <Settings className="h-4.5 w-4.5 text-cyan-400" />
           </button>
         </div>
       </div>

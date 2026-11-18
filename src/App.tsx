@@ -6,8 +6,9 @@ import { SettingsModal } from './components/SettingsModal';
 import { BgmManager, BgmSnapshot } from './game/bgm';
 import { RaceEngine } from './game/engine';
 import { CourseId, MachineId, RaceTelemetry, SpeedClass } from './game/types';
-import { CardCollectionMap } from './types';
-import { loadCardCollection } from './utils/cardCollection';
+import { CardCollectionMap, TermStats } from './types';
+import { loadCardCollection, loadTermStats } from './utils/cardCollection';
+import { useOnlineStatus } from './utils/pwa';
 import {
   GameSettings,
   loadGameSettings,
@@ -39,6 +40,7 @@ const INITIAL_TELEMETRY: RaceTelemetry = {
   standings: [],
   wrongWay: false,
   heldItem: null,
+  heldItemRemainingSec: 0,
   shieldActive: false,
   glowActive: false,
   hoverActive: false,
@@ -49,8 +51,11 @@ const INITIAL_TELEMETRY: RaceTelemetry = {
   activeQuiz: null,
   quizFeedback: null,
   earnedCards: [],
+  missedQuestions: [],
   quizAttempts: 0,
   quizCorrectCount: 0,
+  quizStreak: 0,
+  bestQuizStreak: 0,
 };
 
 const INITIAL_TOUCH_DRAG: TouchDragIndicator = {
@@ -98,16 +103,19 @@ export default function App() {
   const [selectedCourse, setSelectedCourse] = useState<CourseId>('orbital');
   const [selectedMachine, setSelectedMachine] = useState<MachineId>('valkyrie');
   const [speedClass, setSpeedClass] = useState<SpeedClass>('normal');
-  const [muted, setMuted] = useState(false);
+  const muted = settings.masterMuted;
   const [dockCollapsed, setDockCollapsed] = useState(false);
   const [contextLost, setContextLost] = useState(false);
   const [touchDrag, setTouchDrag] = useState<TouchDragIndicator>(INITIAL_TOUCH_DRAG);
   const [collection, setCollection] = useState<CardCollectionMap>(() => loadCardCollection());
+  const [termStats, setTermStats] = useState<TermStats>(() => loadTermStats());
   const [collectionOpen, setCollectionOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const isOnline = useOnlineStatus();
 
   const refreshCollection = useCallback(() => {
     setCollection(loadCardCollection());
+    setTermStats(loadTermStats());
   }, []);
 
   useEffect(() => {
@@ -118,6 +126,7 @@ export default function App() {
     const bgm = new BgmManager();
     bgmRef.current = bgm;
     const unsubBgm = bgm.subscribe((snap) => setBgmSnapshot(snap));
+    bgm.setMasterMuted(initialSettings.masterMuted);
     bgm.setBgmEnabled(initialSettings.bgmEnabled, initialSettings.raceBgm);
     bgm.enterMenu(initialSettings.raceBgm);
 
@@ -125,8 +134,12 @@ export default function App() {
       mountEl,
       (next) => setTelemetry(next),
       (lost) => setContextLost(lost),
-      () => setCollection(loadCardCollection())
+      () => {
+        setCollection(loadCardCollection());
+        setTermStats(loadTermStats());
+      }
     );
+    engine.setMuted(initialSettings.masterMuted);
     engine.setSfxEnabled(initialSettings.sfxEnabled);
     engineRef.current = engine;
     setMinimapPoints(engine.getMinimapPoints());
@@ -156,7 +169,6 @@ export default function App() {
       activePointerRef.current = null;
       setTouchDrag(INITIAL_TOUCH_DRAG);
       engineRef.current?.setTouchInput({
-        brake: false,
         steerAnalog: 0,
       });
     }
@@ -293,13 +305,18 @@ export default function App() {
   }, []);
 
   const handleToggleMute = useCallback(() => {
-    setMuted((prev) => {
-      const next = !prev;
-      engineRef.current?.setMuted(next);
-      bgmRef.current?.setMasterMuted(next);
+    setSettings((prev) => {
+      const nextMuted = !prev.masterMuted;
+      const next: GameSettings = { ...prev, masterMuted: nextMuted };
+      saveGameSettings(next);
+      engineRef.current?.setMuted(nextMuted);
+      bgmRef.current?.setMasterMuted(nextMuted);
+      if (!nextMuted && telemetry.phase === 'menu' && next.bgmEnabled) {
+        bgmRef.current?.enterMenu(next.raceBgm);
+      }
       return next;
     });
-  }, []);
+  }, [telemetry.phase]);
 
   const handleToggleBgm = useCallback(() => {
     setSettings((prev) => {
@@ -366,6 +383,7 @@ export default function App() {
         speedClass={speedClass}
         collection={collection}
         bgmPreparing={bgmPreparing}
+        soundMuted={muted}
         onSelectCourse={handleSelectCourse}
         onSelectMachine={handleSelectMachine}
         onSelectClass={handleSelectClass}
@@ -376,12 +394,20 @@ export default function App() {
           setCollectionOpen(true);
         }}
         onOpenSettings={() => setSettingsOpen(true)}
+        onToggleSound={handleToggleMute}
       />
+
+      {!isOnline && telemetry.phase === 'menu' && (
+        <div className="pointer-events-none fixed bottom-3 left-3 z-30 rounded-lg border border-amber-400/35 bg-[#120d04]/90 px-3 py-1.5 text-[11px] font-medium text-amber-200 shadow-lg">
+          オフラインモード（キャッシュ再生）
+        </div>
+      )}
 
       {/* Card Collection Modal */}
       <CardCollectionModal
         open={collectionOpen}
         collection={collection}
+        termStats={termStats}
         onClose={() => setCollectionOpen(false)}
       />
 

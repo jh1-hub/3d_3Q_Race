@@ -1,17 +1,18 @@
 import { useMemo, useState } from 'react';
 import { ArrowLeft, CheckCircle2, Cpu, Lock, Search, Sparkles, X } from 'lucide-react';
 import { quizCategories } from '../data/quizData';
-import { CardCollectionMap, FlatTerm, Rarity } from '../types';
+import { CardCollectionMap, FlatTerm, Rarity, TermStats } from '../types';
 import { getAllFlatTerms, getUnlockedLoreCount, RARITY_META } from '../utils/cardCollection';
 import { getTermEmoji, getTermIcon } from '../utils/termIcon';
 
 interface CardCollectionModalProps {
   open: boolean;
   collection: CardCollectionMap;
+  termStats: TermStats;
   onClose: () => void;
 }
 
-type OwnershipFilter = 'all' | 'collected' | 'uncollected';
+type OwnershipFilter = 'all' | 'collected' | 'uncollected' | 'weak';
 type RarityFilter = 'ALL' | Rarity;
 
 const RARITY_CARD_SURFACE: Record<
@@ -168,6 +169,7 @@ function ShowcasePartCard({ card, unlockedLevel, count }: ShowcasePartCardProps)
 export function CardCollectionModal({
   open,
   collection,
+  termStats,
   onClose,
 }: CardCollectionModalProps) {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
@@ -182,6 +184,9 @@ export function CardCollectionModal({
     const total = allFlatTerms.length;
     let collected = 0;
     let mastered = 0;
+    let totalAttempts = 0;
+    let totalCorrect = 0;
+    let weakCount = 0;
     const byRarity: Record<Rarity, { total: number; collected: number }> = {
       C: { total: 0, collected: 0 },
       R: { total: 0, collected: 0 },
@@ -189,21 +194,80 @@ export function CardCollectionModal({
       UR: { total: 0, collected: 0 },
     };
 
+    const byCategoryMap = new Map<
+      string,
+      {
+        id: string;
+        title: string;
+        total: number;
+        collected: number;
+        attempts: number;
+        correct: number;
+        weakCount: number;
+      }
+    >();
+    for (const cat of quizCategories) {
+      byCategoryMap.set(cat.id, {
+        id: cat.id,
+        title: cat.title,
+        total: 0,
+        collected: 0,
+        attempts: 0,
+        correct: 0,
+        weakCount: 0,
+      });
+    }
+
     for (const item of allFlatTerms) {
       byRarity[item.term.rarity].total += 1;
+      const catAcc = byCategoryMap.get(item.categoryId);
+      if (catAcc) catAcc.total += 1;
+
       const entry = collection[item.term.id];
       if (entry) {
         collected += 1;
         byRarity[item.term.rarity].collected += 1;
+        if (catAcc) catAcc.collected += 1;
         if (entry.count >= 3) {
           mastered += 1;
         }
       }
+      const stat = termStats[item.term.id];
+      if (stat && stat.attempts > 0) {
+        totalAttempts += stat.attempts;
+        totalCorrect += stat.correct;
+        if (catAcc) {
+          catAcc.attempts += stat.attempts;
+          catAcc.correct += stat.correct;
+        }
+        if (stat.correct / stat.attempts < 0.7) {
+          weakCount += 1;
+          if (catAcc) catAcc.weakCount += 1;
+        }
+      }
     }
 
+    const byCategory = Array.from(byCategoryMap.values()).map((c) => ({
+      ...c,
+      accuracyPercent:
+        c.attempts > 0 ? Math.round((c.correct / c.attempts) * 100) : null,
+    }));
+
     const percent = total > 0 ? Math.round((collected / total) * 1000) / 10 : 0;
-    return { total, collected, mastered, percent, byRarity };
-  }, [allFlatTerms, collection]);
+    const accuracyPercent =
+      totalAttempts > 0 ? Math.round((totalCorrect / totalAttempts) * 100) : null;
+    return {
+      total,
+      collected,
+      mastered,
+      percent,
+      byRarity,
+      byCategory,
+      totalAttempts,
+      accuracyPercent,
+      weakCount,
+    };
+  }, [allFlatTerms, collection, termStats]);
 
   const filteredTerms = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -215,9 +279,12 @@ export function CardCollectionModal({
         return false;
       }
       const entry = collection[item.term.id];
+      const stat = termStats[item.term.id];
       const isOwned = Boolean(entry);
+      const isWeak = Boolean(stat && stat.attempts > 0 && stat.correct / stat.attempts < 0.7);
       if (ownershipFilter === 'collected' && !isOwned) return false;
       if (ownershipFilter === 'uncollected' && isOwned) return false;
+      if (ownershipFilter === 'weak' && !isWeak) return false;
 
       if (q) {
         if (!entry) {
@@ -235,11 +302,12 @@ export function CardCollectionModal({
       }
       return true;
     });
-  }, [allFlatTerms, collection, ownershipFilter, rarityFilter, searchQuery, selectedCategoryId]);
+  }, [allFlatTerms, collection, ownershipFilter, rarityFilter, searchQuery, selectedCategoryId, termStats]);
 
   if (!open) return null;
 
   const selectedEntry = selectedCard ? collection[selectedCard.term.id] : undefined;
+  const selectedStat = selectedCard ? termStats[selectedCard.term.id] : undefined;
   const selectedUnlockedLevel = selectedEntry
     ? getUnlockedLoreCount(selectedEntry.count, 3)
     : 0;
@@ -266,11 +334,23 @@ export function CardCollectionModal({
                 </span>
                 <span aria-hidden="true">·</span>
                 <span className="text-emerald-300">全解放 {summary.mastered}</span>
-                <span className="hidden md:inline text-slate-600">|</span>
-                <span className="hidden md:inline">C {summary.byRarity.C.collected}/{summary.byRarity.C.total}</span>
-                <span className="hidden md:inline text-cyan-300">R {summary.byRarity.R.collected}/{summary.byRarity.R.total}</span>
-                <span className="hidden md:inline text-purple-300">SR {summary.byRarity.SR.collected}/{summary.byRarity.SR.total}</span>
-                <span className="hidden md:inline text-amber-300">UR {summary.byRarity.UR.collected}/{summary.byRarity.UR.total}</span>
+                {summary.accuracyPercent !== null && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="text-slate-200">正答率 {summary.accuracyPercent}%</span>
+                  </>
+                )}
+                {summary.weakCount > 0 && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="text-amber-300">要復習 {summary.weakCount}</span>
+                  </>
+                )}
+                <span className="hidden lg:inline text-slate-600">|</span>
+                <span className="hidden lg:inline">C {summary.byRarity.C.collected}/{summary.byRarity.C.total}</span>
+                <span className="hidden lg:inline text-cyan-300">R {summary.byRarity.R.collected}/{summary.byRarity.R.total}</span>
+                <span className="hidden lg:inline text-purple-300">SR {summary.byRarity.SR.collected}/{summary.byRarity.SR.total}</span>
+                <span className="hidden lg:inline text-amber-300">UR {summary.byRarity.UR.collected}/{summary.byRarity.UR.total}</span>
               </div>
             </div>
           </div>
@@ -342,6 +422,7 @@ export function CardCollectionModal({
                     { id: 'all', label: '全て' },
                     { id: 'collected', label: '取得' },
                     { id: 'uncollected', label: '未取得' },
+                    { id: 'weak', label: `要復習 (${summary.weakCount})` },
                   ] as { id: OwnershipFilter; label: string }[]
                 ).map((opt) => (
                   <button
@@ -350,7 +431,9 @@ export function CardCollectionModal({
                     onClick={() => setOwnershipFilter(opt.id)}
                     className={`min-h-[34px] rounded-md px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       ownershipFilter === opt.id
-                        ? 'bg-slate-700 text-white font-bold'
+                        ? opt.id === 'weak'
+                          ? 'bg-amber-500 text-slate-950 font-bold'
+                          : 'bg-slate-700 text-white font-bold'
                         : 'text-slate-400 hover:text-white'
                     }`}
                   >
@@ -376,14 +459,87 @@ export function CardCollectionModal({
         {/* Main Content: Responsive 2-col Mobile Grid + Slide-Over Detail Inspector */}
         <div className="relative flex flex-1 overflow-hidden">
           <div className="flex-1 overflow-y-auto p-3 sm:p-5">
+            {/* Per-Category Accuracy Summary Strip */}
+            <div className="mb-3.5 sm:mb-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {summary.byCategory.map((cat) => {
+                const isCatActive = selectedCategoryId === cat.id;
+                const acc = cat.accuracyPercent;
+                const barWidth = acc !== null ? acc : 0;
+                const accColor =
+                  acc === null
+                    ? 'text-slate-400'
+                    : acc >= 80
+                      ? 'text-emerald-300'
+                      : acc >= 60
+                        ? 'text-cyan-300'
+                        : 'text-amber-300';
+                const barFill =
+                  acc === null
+                    ? '#475569'
+                    : acc >= 80
+                      ? '#10B981'
+                      : acc >= 60
+                        ? '#22D3EE'
+                        : '#F59E0B';
+
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() =>
+                      setSelectedCategoryId((prev) => (prev === cat.id ? 'all' : cat.id))
+                    }
+                    className={`flex flex-col justify-between rounded-xl border px-3 py-2.5 text-left transition-colors cursor-pointer ${
+                      isCatActive
+                        ? 'border-cyan-400/70 bg-cyan-500/10'
+                        : 'border-white/10 bg-slate-900/55 hover:border-white/25'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-white truncate">
+                        {cat.title}
+                      </span>
+                      <span className={`font-mono-num text-xs font-bold shrink-0 ${accColor}`}>
+                        {acc !== null ? `${acc}%` : '未挑戦'}
+                      </span>
+                    </div>
+
+                    <div className="mt-2 h-1.5 w-full overflow-hidden rounded-sm bg-slate-800">
+                      <div
+                        className="h-full transition-all duration-300"
+                        style={{ width: `${barWidth}%`, backgroundColor: barFill }}
+                      />
+                    </div>
+
+                    <div className="mt-1.5 flex items-center justify-between gap-2 font-mono-num text-[10px] text-slate-400">
+                      <span>
+                        収集 {cat.collected}/{cat.total}
+                        {cat.attempts > 0 ? ` · ${cat.correct}/${cat.attempts}正解` : ''}
+                      </span>
+                      {cat.weakCount > 0 && (
+                        <span className="font-semibold text-amber-300 shrink-0">
+                          要復習 {cat.weakCount}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
             {filteredTerms.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center text-center text-slate-400 px-4">
+              <div className="flex h-48 flex-col items-center justify-center text-center text-slate-400 px-4">
                 <p className="text-sm font-medium">一致するパーツがありません</p>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-2.5 sm:gap-3.5 md:grid-cols-3 xl:grid-cols-4">
                 {filteredTerms.map((item) => {
                   const entry = collection[item.term.id];
+                  const stat = termStats[item.term.id];
+                  const accPct =
+                    stat && stat.attempts > 0
+                      ? Math.round((stat.correct / stat.attempts) * 100)
+                      : null;
                   const isOwned = Boolean(entry);
                   const meta = RARITY_META[item.term.rarity];
                   const surface = RARITY_CARD_SURFACE[item.term.rarity];
@@ -484,6 +640,15 @@ export function CardCollectionModal({
                             ))}
                           </div>
                           <span className="font-mono-num text-[10px] font-semibold text-slate-400 shrink-0">
+                            {accPct !== null && (
+                              <span
+                                className={`mr-1.5 ${
+                                  accPct < 70 ? 'text-amber-300' : 'text-emerald-300'
+                                }`}
+                              >
+                                {accPct}%
+                              </span>
+                            )}
                             {unlockedTier}/3
                           </span>
                         </div>
@@ -546,17 +711,36 @@ export function CardCollectionModal({
                       count={selectedEntry.count}
                     />
 
-                    {/* Compact Unlock Progress */}
-                    <div className="flex items-center justify-between rounded-lg border border-white/10 bg-slate-900/70 px-3 py-2 text-xs">
-                      <span className="text-slate-400">
-                        正答クリア {selectedEntry.count} 回
-                      </span>
-                      <span className="flex items-center gap-1 font-mono-num font-bold text-cyan-300">
-                        {selectedUnlockedLevel >= 3 && (
-                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                        )}
-                        解放 {selectedUnlockedLevel} / 3
-                      </span>
+                    {/* Compact Unlock & Accuracy Progress */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between rounded-lg border border-white/10 bg-slate-900/70 px-3 py-2 text-xs">
+                        <span className="text-slate-400">
+                          正答クリア {selectedEntry.count} 回
+                        </span>
+                        <span className="flex items-center gap-1 font-mono-num font-bold text-cyan-300">
+                          {selectedUnlockedLevel >= 3 && (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                          )}
+                          解放 {selectedUnlockedLevel} / 3
+                        </span>
+                      </div>
+
+                      {selectedStat && selectedStat.attempts > 0 && (
+                        <div className="flex items-center justify-between rounded-lg border border-white/10 bg-slate-900/50 px-3 py-2 text-xs font-mono-num">
+                          <span className="text-slate-400">
+                            学習正答率 ({selectedStat.correct}/{selectedStat.attempts})
+                          </span>
+                          <span
+                            className={`font-bold ${
+                              selectedStat.correct / selectedStat.attempts < 0.7
+                                ? 'text-amber-300'
+                                : 'text-emerald-300'
+                            }`}
+                          >
+                            {Math.round((selectedStat.correct / selectedStat.attempts) * 100)}%
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Progressive Descriptions */}
@@ -647,6 +831,12 @@ export function CardCollectionModal({
                     <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
                       レース中の正答で入手でき、同じ用語を3回まで正答すると全解説が解放されます。
                     </p>
+                    {selectedStat && selectedStat.attempts > 0 && (
+                      <div className="mt-4 w-full rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs font-mono-num text-amber-200">
+                        これまでの挑戦: {selectedStat.attempts}回 · 正解 {selectedStat.correct}回 (
+                        {Math.round((selectedStat.correct / selectedStat.attempts) * 100)}%)
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

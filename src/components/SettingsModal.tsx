@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Check,
+  ChevronDown,
+  Download,
   Loader2,
   Music,
   Settings,
-  Shuffle,
   Trophy,
   Volume2,
   VolumeX,
@@ -13,10 +14,14 @@ import {
 import { BgmSnapshot } from '../game/bgm';
 import { COURSES, CourseId, MACHINES, SpeedClass } from '../game/types';
 import { formatRaceTime } from '../utils/formatTime';
+import {
+  checkAllBgmCached,
+  downloadAllOfflineAssets,
+  usePWAInstall,
+} from '../utils/pwa';
 import { getCourseRankings } from '../utils/rankings';
 import {
   GameSettings,
-  MENU_MIDI_TITLE,
   RACE_BGM_TRACKS,
   RaceBgmSelection,
 } from '../utils/settings';
@@ -50,10 +55,19 @@ export function SettingsModal({
   const [rankingCourse, setRankingCourse] = useState<CourseId>(initialCourse);
   const [rankingClass, setRankingClass] = useState<SpeedClass>(initialSpeedClass);
 
+  const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
+  const [showInstallModal, setShowInstallModal] = useState(false);
+  const [offlineCaching, setOfflineCaching] = useState(false);
+  const [offlineProgress, setOfflineProgress] = useState<{ done: number; total: number } | null>(null);
+  const [offlineReady, setOfflineReady] = useState(false);
+
   useEffect(() => {
     if (open) {
       setRankingCourse(initialCourse);
       setRankingClass(initialSpeedClass);
+      void checkAllBgmCached().then((ok) => setOfflineReady(ok));
+    } else {
+      setShowInstallModal(false);
     }
   }, [open, initialCourse, initialSpeedClass]);
 
@@ -64,38 +78,29 @@ export function SettingsModal({
 
   if (!open) return null;
 
-  const upcomingTrack = RACE_BGM_TRACKS.find(
-    (t) => t.id === bgmSnapshot.upcomingRandomTrackId
-  );
-  const upcomingStatus = bgmSnapshot.statuses[bgmSnapshot.upcomingRandomTrackId];
+  const activeTrackId =
+    settings.raceBgm === 'random' ? bgmSnapshot.upcomingRandomTrackId : settings.raceBgm;
+  const activeTrackMeta = RACE_BGM_TRACKS.find((t) => t.id === activeTrackId);
+  const activeTrackStatus = bgmSnapshot.statuses[activeTrackId];
 
-  const renderTrackStatus = (status: 'idle' | 'loading' | 'ready' | 'error') => {
-    if (status === 'ready') {
-      return (
-        <span className="flex items-center gap-1 text-[11px] font-medium text-emerald-400 whitespace-nowrap shrink-0">
-          <Check className="h-3.5 w-3.5" />
-          準備完了
-        </span>
-      );
+  const handleDownloadClick = async () => {
+    setShowInstallModal(true);
+
+    if (!offlineCaching) {
+      setOfflineCaching(true);
+      try {
+        const ok = await downloadAllOfflineAssets((done, total) => {
+          setOfflineProgress({ done, total });
+        });
+        setOfflineReady(ok);
+      } finally {
+        setOfflineCaching(false);
+      }
     }
-    if (status === 'loading') {
-      return (
-        <span className="flex items-center gap-1 text-[11px] font-medium text-cyan-300 whitespace-nowrap shrink-0">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          読込中
-        </span>
-      );
+
+    if (isInstallable) {
+      await install();
     }
-    if (status === 'error') {
-      return (
-        <span className="text-[11px] font-medium text-red-400 whitespace-nowrap shrink-0">
-          読込失敗
-        </span>
-      );
-    }
-    return (
-      <span className="text-[11px] text-slate-500 whitespace-nowrap shrink-0">未読込</span>
-    );
   };
 
   return (
@@ -103,7 +108,7 @@ export function SettingsModal({
       onPointerDown={(e) => e.stopPropagation()}
       className="pointer-events-auto fixed inset-0 z-40 flex items-center justify-center bg-[#04060c]/92 sm:p-5"
     >
-      <div className="flex h-[100dvh] sm:h-auto sm:max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden sm:rounded-2xl border-white/12 sm:border bg-[#070b14] shadow-2xl">
+      <div className="relative flex h-[100dvh] sm:h-auto sm:max-h-[88vh] w-full max-w-xl flex-col overflow-hidden sm:rounded-2xl border-white/12 sm:border bg-[#070b14] shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3.5 sm:px-6">
           <div className="flex items-center gap-3 min-w-0">
@@ -112,11 +117,8 @@ export function SettingsModal({
             </div>
             <div className="min-w-0">
               <h2 className="font-display text-lg sm:text-xl font-bold text-white truncate">
-                システム設定・ランキング
+                設定・ランキング
               </h2>
-              <p className="text-xs text-slate-400 truncate">
-                サウンド・レースBGM・コース別自己ベスト記録
-              </p>
             </div>
           </div>
 
@@ -142,7 +144,7 @@ export function SettingsModal({
             }`}
           >
             <Music className="h-4 w-4 shrink-0" />
-            <span>サウンド・BGM</span>
+            <span>サウンド・アプリ</span>
           </button>
           <button
             type="button"
@@ -167,7 +169,7 @@ export function SettingsModal({
                 <button
                   type="button"
                   onClick={onToggleBgm}
-                  className={`flex min-h-[60px] items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition-colors cursor-pointer ${
+                  className={`flex min-h-[58px] items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition-colors cursor-pointer ${
                     settings.bgmEnabled
                       ? 'border-cyan-400/50 bg-cyan-500/10'
                       : 'border-white/10 bg-slate-900/60'
@@ -179,10 +181,7 @@ export function SettingsModal({
                         settings.bgmEnabled ? 'text-cyan-400' : 'text-slate-500'
                       }`}
                     />
-                    <div className="min-w-0">
-                      <div className="text-sm font-bold text-white">BGM</div>
-                      <div className="text-[11px] text-slate-400">トップ・レース中の音楽</div>
-                    </div>
+                    <span className="text-sm font-bold text-white">BGM</span>
                   </div>
                   <span
                     className={`rounded-md px-2.5 py-1 text-xs font-bold font-mono-num shrink-0 ${
@@ -198,7 +197,7 @@ export function SettingsModal({
                 <button
                   type="button"
                   onClick={onToggleSfx}
-                  className={`flex min-h-[60px] items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition-colors cursor-pointer ${
+                  className={`flex min-h-[58px] items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition-colors cursor-pointer ${
                     settings.sfxEnabled
                       ? 'border-amber-400/50 bg-amber-500/10'
                       : 'border-white/10 bg-slate-900/60'
@@ -210,10 +209,7 @@ export function SettingsModal({
                     ) : (
                       <VolumeX className="h-5 w-5 shrink-0 text-slate-500" />
                     )}
-                    <div className="min-w-0">
-                      <div className="text-sm font-bold text-white">効果音 (SFX)</div>
-                      <div className="text-[11px] text-slate-400">エンジン・ブースト・被弾音</div>
-                    </div>
+                    <span className="text-sm font-bold text-white">効果音 (SFX)</span>
                   </div>
                   <span
                     className={`rounded-md px-2.5 py-1 text-xs font-bold font-mono-num shrink-0 ${
@@ -227,91 +223,81 @@ export function SettingsModal({
                 </button>
               </div>
 
-              {/* Race BGM Track Selector */}
+              {/* Compact Race BGM Dropdown List */}
               <div className="border-t border-white/10 pt-4">
-                <div className="mb-2.5 flex items-center justify-between gap-2">
-                  <h3 className="text-xs font-semibold tracking-wider text-slate-300">
-                    レースBGM設定
-                  </h3>
-                  <span className="text-[11px] text-slate-400">
-                    選択するとバックグラウンドで先読みします
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <label
+                    htmlFor="race-bgm-select"
+                    className="text-xs font-semibold tracking-wider text-slate-300"
+                  >
+                    レースBGM
+                  </label>
+                  <span className="flex items-center gap-1.5 text-[11px] font-mono-num text-slate-400">
+                    {settings.raceBgm === 'random' && activeTrackMeta
+                      ? `次回: ${activeTrackMeta.title} · `
+                      : ''}
+                    {activeTrackStatus === 'ready' ? (
+                      <span className="inline-flex items-center gap-1 text-emerald-400">
+                        <Check className="h-3 w-3" />
+                        準備完了
+                      </span>
+                    ) : activeTrackStatus === 'loading' ? (
+                      <span className="inline-flex items-center gap-1 text-cyan-300">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        読込中
+                      </span>
+                    ) : activeTrackStatus === 'error' ? (
+                      <span className="text-red-400">読込失敗</span>
+                    ) : (
+                      <span>未読込</span>
+                    )}
                   </span>
                 </div>
 
-                <div className="space-y-2">
-                  {/* Random Mode (Default) */}
-                  <button
-                    type="button"
-                    onClick={() => onSelectRaceBgm('random')}
-                    className={`flex min-h-[54px] w-full items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-left transition-colors cursor-pointer ${
-                      settings.raceBgm === 'random'
-                        ? 'border-cyan-400 bg-cyan-500/12'
-                        : 'border-white/10 bg-slate-900/60 hover:border-white/25'
-                    }`}
+                <div className="relative">
+                  <select
+                    id="race-bgm-select"
+                    value={settings.raceBgm}
+                    onChange={(e) => onSelectRaceBgm(e.target.value as RaceBgmSelection)}
+                    className="min-h-[46px] w-full appearance-none rounded-xl border border-white/15 bg-slate-900 px-4 py-2.5 pr-10 text-sm font-semibold text-white transition-colors hover:border-cyan-400/50 focus:border-cyan-400 focus:outline-none cursor-pointer"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <Shuffle
-                        className={`h-4 w-4 shrink-0 ${
-                          settings.raceBgm === 'random' ? 'text-cyan-400' : 'text-slate-400'
-                        }`}
-                      />
-                      <div className="min-w-0">
-                        <div className="text-sm font-bold text-white">
-                          ランダム再生（デフォルト）
-                        </div>
-                        <div className="text-[11px] text-slate-400 truncate">
-                          次回予定: {upcomingTrack?.title ?? '選択中'}
-                        </div>
-                      </div>
-                    </div>
-                    {renderTrackStatus(upcomingStatus)}
-                  </button>
-
-                  {/* Fixed MP3 Tracks */}
-                  {RACE_BGM_TRACKS.map((track) => {
-                    const selected = settings.raceBgm === track.id;
-                    const status = bgmSnapshot.statuses[track.id];
-                    return (
-                      <button
-                        key={track.id}
-                        type="button"
-                        onClick={() => onSelectRaceBgm(track.id)}
-                        className={`flex min-h-[50px] w-full items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-left transition-colors cursor-pointer ${
-                          selected
-                            ? 'border-cyan-400 bg-cyan-500/12'
-                            : 'border-white/10 bg-slate-900/50 hover:border-white/25'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <span
-                            className={`h-2.5 w-2.5 rounded-sm shrink-0 ${
-                              selected ? 'bg-cyan-400' : 'bg-slate-600'
-                            }`}
-                          />
-                          <div className="min-w-0">
-                            <div className="text-sm font-semibold text-white truncate">
-                              {track.title}
-                            </div>
-                            <div className="text-[11px] text-slate-400 truncate">
-                              {track.fileName}
-                            </div>
-                          </div>
-                        </div>
-                        {renderTrackStatus(status)}
-                      </button>
-                    );
-                  })}
+                    <option value="random">ランダム再生（デフォルト）</option>
+                    {RACE_BGM_TRACKS.map((track) => (
+                      <option key={track.id} value={track.id}>
+                        {track.title}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 </div>
               </div>
 
-              {/* Menu MIDI Playback Info */}
-              <div className="rounded-xl border border-white/10 bg-slate-900/45 px-4 py-3 text-xs text-slate-300 leading-relaxed">
-                <div className="font-semibold text-white">トップ画面BGMについて</div>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  トップ画面では {MENU_MIDI_TITLE} を内蔵Web Audioシンセサイザーでループ再生します
-                  {bgmSnapshot.midiError ? `（読込エラー: ${bgmSnapshot.midiError}）` : ''}
-                  。ブラウザの自動再生制限により、初回アクセス時は画面を1回タップまたはキー操作したタイミングで再生が始まります。
-                </p>
+              {/* Clean Single PWA Download Button (No upfront clutter) */}
+              <div className="border-t border-white/10 pt-4">
+                <button
+                  type="button"
+                  onClick={handleDownloadClick}
+                  className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl border border-cyan-400/45 bg-cyan-500/12 px-5 py-3 text-sm font-bold text-cyan-200 transition-colors hover:bg-cyan-500/20 cursor-pointer whitespace-nowrap"
+                >
+                  {offlineCaching ? (
+                    <>
+                      <Loader2 className="h-4.5 w-4.5 animate-spin" />
+                      <span>
+                        ダウンロード中
+                        {offlineProgress ? ` (${offlineProgress.done}/${offlineProgress.total})` : '...'}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="h-4.5 w-4.5" />
+                      <span>
+                        {isInstalled && offlineReady
+                          ? 'オフラインデータを更新'
+                          : 'アプリをダウンロード'}
+                      </span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           ) : (
@@ -445,6 +431,93 @@ export function SettingsModal({
             </div>
           )}
         </div>
+
+        {/* Install Instructions Sub-Modal (Shown only after clicking Download button) */}
+        {showInstallModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <div className="w-full max-w-md rounded-2xl border border-white/15 bg-[#080d18] p-5 shadow-2xl">
+              <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-3">
+                <h3 className="font-display text-base sm:text-lg font-bold text-white">
+                  アプリのインストール方法
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setShowInstallModal(false)}
+                  aria-label="閉じる"
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Offline Cache Progress / Status */}
+              <div className="mt-3.5 flex items-center justify-between rounded-xl border border-white/10 bg-slate-900/70 px-3.5 py-2.5 text-xs">
+                <span className="text-slate-300">オフライン用データ（BGM・ゲーム本体）</span>
+                {offlineCaching ? (
+                  <span className="flex items-center gap-1.5 font-mono-num font-bold text-cyan-300">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    {offlineProgress ? `${offlineProgress.done}/${offlineProgress.total}` : '保存中'}
+                  </span>
+                ) : offlineReady ? (
+                  <span className="flex items-center gap-1 font-bold text-emerald-400">
+                    <Check className="h-3.5 w-3.5" />
+                    保存完了
+                  </span>
+                ) : (
+                  <span className="text-slate-400">準備完了</span>
+                )}
+              </div>
+
+              {/* Device-Specific Install Steps */}
+              <div className="mt-3.5 space-y-2.5 text-xs leading-relaxed text-slate-300">
+                {isInstalled ? (
+                  <p className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-3 text-emerald-200">
+                    すでにアプリとしてインストール済みです。全アセットが保存されているため、オフラインでもそのままプレイできます。
+                  </p>
+                ) : (
+                  <>
+                    <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
+                      <div className="font-bold text-white">iPhone / iPad (Safari)</div>
+                      <p className="mt-1 text-slate-400">
+                        1. Safari下部の「共有」アイコンをタップ
+                        <br />
+                        2.「ホーム画面に追加」を選択して「追加」をタップ
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
+                      <div className="font-bold text-white">Android / PC (Chrome・Edge)</div>
+                      <p className="mt-1 text-slate-400">
+                        {isIOS
+                          ? 'ブラウザのメニューから「ホーム画面に追加」または「アプリをインストール」を選択してください。'
+                          : '自動でインストール確認ダイアログが表示されない場合は、ブラウザ右上のメニュー（またはアドレスバー右端のインストールアイコン）から「アプリをインストール」を選択してください。'}
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="mt-4 flex items-center gap-2">
+                {isInstallable && !isInstalled && (
+                  <button
+                    type="button"
+                    onClick={() => void install()}
+                    className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-cyan-400 cursor-pointer"
+                  >
+                    <Download className="h-4 w-4" />
+                    インストールを実行
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowInstallModal(false)}
+                  className="min-h-[44px] flex-1 rounded-lg border border-white/15 bg-slate-900 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 cursor-pointer"
+                >
+                  閉じる
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

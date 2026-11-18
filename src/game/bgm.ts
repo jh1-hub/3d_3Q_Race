@@ -148,15 +148,36 @@ export class BgmManager {
     return this.upcomingRandomTrackId;
   }
 
+  private async fetchAudioArrayBuffer(rawUrl: string): Promise<ArrayBuffer> {
+    const encoded = encodeURI(rawUrl);
+    if (typeof caches !== 'undefined') {
+      try {
+        const cached = (await caches.match(encoded)) ?? (await caches.match(rawUrl));
+        if (cached) {
+          return await cached.arrayBuffer();
+        }
+      } catch {
+        // Ignore cache read error and fall back to network
+      }
+    }
+    const res = await fetch(encoded);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (typeof caches !== 'undefined') {
+      try {
+        const cache = await caches.open('bgm-assets-cache');
+        await cache.put(encoded, res.clone());
+      } catch {
+        // Ignore cache write error
+      }
+    }
+    return res.arrayBuffer();
+  }
+
   public preloadMenuMidi(): Promise<ParsedMidi | null> {
     if (this.midiParsed) return Promise.resolve(this.midiParsed);
     if (this.midiLoadPromise) return this.midiLoadPromise;
 
-    this.midiLoadPromise = fetch(encodeURI(MENU_MIDI_URL))
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.arrayBuffer();
-      })
+    this.midiLoadPromise = this.fetchAudioArrayBuffer(MENU_MIDI_URL)
       .then((buf) => {
         const parsed = parseStandardMidi(buf);
         this.midiParsed = parsed;
@@ -202,11 +223,7 @@ export class BgmManager {
     this.trackStatuses[trackId] = 'loading';
     this.notify();
 
-    const promise = fetch(encodeURI(meta.url))
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.arrayBuffer();
-      })
+    const promise = this.fetchAudioArrayBuffer(meta.url)
       .then((arrayBuffer) => ctx.decodeAudioData(arrayBuffer))
       .then((decoded) => {
         this.decodedCache.set(trackId, decoded);

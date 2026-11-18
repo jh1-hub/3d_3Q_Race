@@ -53,6 +53,7 @@ export const RACE_BGM_TRACKS: RaceBgmTrackMeta[] = [
 export interface GameSettings {
   bgmEnabled: boolean;
   sfxEnabled: boolean;
+  masterMuted: boolean;
   raceBgm: RaceBgmSelection;
 }
 
@@ -61,6 +62,7 @@ const SETTINGS_STORAGE_KEY = 'hyperion_gp_settings_v1';
 const DEFAULT_SETTINGS: GameSettings = {
   bgmEnabled: true,
   sfxEnabled: true,
+  masterMuted: false,
   raceBgm: 'random',
 };
 
@@ -74,6 +76,7 @@ export function loadGameSettings(): GameSettings {
     return {
       bgmEnabled: typeof parsed.bgmEnabled === 'boolean' ? parsed.bgmEnabled : true,
       sfxEnabled: typeof parsed.sfxEnabled === 'boolean' ? parsed.sfxEnabled : true,
+      masterMuted: typeof parsed.masterMuted === 'boolean' ? parsed.masterMuted : false,
       raceBgm:
         parsed.raceBgm === 'random' || (typeof parsed.raceBgm === 'string' && VALID_TRACK_IDS.has(parsed.raceBgm))
           ? (parsed.raceBgm as RaceBgmSelection)
