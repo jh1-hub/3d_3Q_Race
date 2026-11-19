@@ -317,3 +317,33 @@ export function sampleGhostTimeAtProgress(
   return curve.timesMs[lo] + (curve.timesMs[hi] - curve.timesMs[lo]) * alpha;
 }
 
+export function sampleGhostProgressAtTime(
+  curve: GhostProgressCurve,
+  timeMs: number
+): number {
+  const len = curve.timesMs.length;
+  if (len < 2 || timeMs <= curve.timesMs[0]) {
+    return curve.progresses[0] ?? 0;
+  }
+  if (timeMs >= curve.timesMs[len - 1]) {
+    return curve.maxProgress;
+  }
+
+  let lo = 0;
+  let hi = len - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (curve.timesMs[mid] <= timeMs) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  const tA = curve.timesMs[lo];
+  const tB = curve.timesMs[hi];
+  const span = tB - tA;
+  const alpha = span > 1e-3 ? Math.max(0, Math.min(1, (timeMs - tA) / span)) : 0;
+  return curve.progresses[lo] + (curve.progresses[hi] - curve.progresses[lo]) * alpha;
+}
+

@@ -581,12 +581,21 @@ export function RaceHud({
                   <span className="pointer-events-none absolute top-0 bottom-0 left-2/3 w-px bg-white/15" />
                 </>
               )}
+              {isTimeAttack && showBestGhost && telemetry.bestGhostProgressNorm !== null && (
+                <span
+                  aria-label="Best Ghost Position"
+                  className="absolute top-1/2 z-10 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[#05070e] bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.85)] transition-all duration-100"
+                  style={{
+                    left: `${Math.max(2, Math.min(98, telemetry.bestGhostProgressNorm * 100))}%`,
+                  }}
+                />
+              )}
               {telemetry.standings.map((s) => (
                 <span
                   key={s.id}
                   className={`absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full transition-all duration-100 ${
                     s.isPlayer
-                      ? 'z-10 h-3 w-3 border-2 border-white shadow-[0_0_8px_rgba(34,211,238,0.85)]'
+                      ? 'z-20 h-3 w-3 border-2 border-white shadow-[0_0_8px_rgba(34,211,238,0.85)]'
                       : 'h-2 w-2 border border-[#05070e]'
                   }`}
                   style={{

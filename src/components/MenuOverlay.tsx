@@ -442,7 +442,7 @@ export function MenuOverlay({
                         <span className="font-display tracking-wide">{row.name}</span>
                       </div>
                       <span className="font-mono-num text-slate-400">
-                        {row.isPlayer ? formatRaceTime(row.totalTimeMs) : `LAP ${row.lap}`}
+                        {row.isPlayer || row.finished ? formatRaceTime(row.totalTimeMs) : `LAP ${row.lap}`}
                       </span>
                     </div>
                   ))}

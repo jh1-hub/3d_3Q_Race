@@ -473,6 +473,7 @@ export interface RacerStanding {
   totalTimeMs: number;
   bestLapMs: number | null;
   accentHex: string;
+  finished: boolean;
 }
 
 export interface QuizLaneOption {
@@ -562,6 +563,7 @@ export interface RaceTelemetry {
   manualGauge: number; // 0..1 manual steering gauge
   hasBestGhost: boolean;
   hasLastGhost: boolean;
+  bestGhostProgressNorm: number | null;
   rank: number;
   totalRacers: number;
   lap: number;

@@ -52,6 +52,7 @@ import {
   loadLastGhost,
   packGhostFrame,
   sampleGhostAtTime,
+  sampleGhostProgressAtTime,
   sampleGhostTimeAtProgress,
   saveTimeAttackGhosts,
   toGhostSummary,
@@ -714,6 +715,11 @@ export class RaceEngine {
     this.camInitialized = false;
     this.hitAlertSource = null;
     this.hitAlertTimer = 0;
+    this.eventNotice = null;
+    this.eventNoticeTimer = 0;
+    this.isNewRecord = false;
+    this.isNewBestTotal = false;
+    this.isNewBestGhost = false;
     this.rankingPlacement = null;
     this.quizGatesCleared = 0;
     this.activeQuiz = null;
@@ -1056,7 +1062,10 @@ export class RaceEngine {
   private handleKeyDown = (e: KeyboardEvent): void => {
     this.keys[e.code] = true;
     if (
-      (e.code === 'ArrowUp' || e.code === 'ArrowDown' || e.code === 'Space') &&
+      (e.code === 'ArrowUp' ||
+        e.code === 'ArrowDown' ||
+        e.code === 'Space' ||
+        e.code === 'Enter') &&
       (this.phase === 'racing' || this.phase === 'countdown')
     ) {
       e.preventDefault();
@@ -1141,6 +1150,10 @@ export class RaceEngine {
   }
 
   private step(dt: number): void {
+    if (this.phase === 'paused') {
+      return;
+    }
+
     this.totalElapsedSec += dt;
     this.itemSystem.update(dt, this.totalElapsedSec);
 
@@ -1173,10 +1186,6 @@ export class RaceEngine {
       });
       this.updateMenuCamera(dt);
       this.audio.updateEngine(0, false, false);
-      return;
-    }
-
-    if (this.phase === 'paused') {
       return;
     }
 
@@ -1261,7 +1270,7 @@ export class RaceEngine {
       if (r.isPlayer && !r.finished && this.phase === 'racing') {
         playerAccelerating = this.updatePlayerRacer(r, dt, spec, classMultiplier);
       } else {
-        this.updateAiRacer(r, dt, spec, classMultiplier);
+        this.updateAiRacer(r, dt, classMultiplier);
       }
 
       this.checkSpeedPads(r);
@@ -1563,7 +1572,6 @@ export class RaceEngine {
   private updateAiRacer(
     r: RacerState,
     dt: number,
-    playerSpec: MachineSpec,
     classMultiplier: number
   ): void {
     const playerProgress = this.getTotalProgress(this.playerRacer);
@@ -1609,7 +1617,8 @@ export class RaceEngine {
         : THREE.MathUtils.clamp(0.96 + gap * 0.20, 0.91, 0.98);
     }
 
-    const baseAiSpeed = (playerSpec.maxSpeedKmh / 3.6) * classMultiplier;
+    // Fixed reference speed (~VALKYRIE-X class) so player's machine choice genuinely differentiates pace vs handling
+    const baseAiSpeed = (434 / 3.6) * classMultiplier;
     const playerFollowCap =
       isHard && !isFinalStretch && gap > 0.012
         ? Math.max(baseAiSpeed, this.playerRacer.speed * 1.18)
@@ -1657,7 +1666,7 @@ export class RaceEngine {
     const aiNearGate = this.isNearItemLine(r.s, 280, 65);
     const playerNearGate = this.isNearItemLine(this.playerRacer.s, 260, 55);
     let avoidingPlayer = false;
-    if (aiNearGate || playerNearGate) {
+    if (!r.isPlayer && (aiNearGate || playerNearGate)) {
       let dsPlayer = Math.abs(r.s - this.playerRacer.s);
       if (dsPlayer > 0.5) dsPlayer = 1 - dsPlayer;
       if (dsPlayer * this.track.totalLength < 220 || aiNearGate) {
@@ -2352,8 +2361,8 @@ export class RaceEngine {
       if (ds > 0.5) ds = 1 - ds;
       const distAlong = ds * this.track.totalLength;
       if (distAlong < pad.length * 0.55 && Math.abs(r.lateral - pad.lateral) < pad.width * 0.65) {
-        if (r.accelSurgeTimer <= 0.1) {
-          r.accelSurgeTimer = 1.25;
+        if (r.accelSurgeTimer < 0.85) {
+          r.accelSurgeTimer = 1.35;
           this.track.sampleAtS(r.s, _sample);
           this.itemSystem.spawnDashRings(r.pos, _sample.tangent, _sample.up, 0x38bdf8, false);
           if (r.isPlayer) {
@@ -2423,6 +2432,10 @@ export class RaceEngine {
           this.quizLanesRevealed = false;
           this.hitAlertSource = null;
           this.hitAlertTimer = 0;
+          r.hitSpinTimer = 0;
+          r.quizPenaltyTimer = 0;
+          r.heldItem = null;
+          r.heldItemHoldTime = 0;
 
           this.track.sampleAtS(r.s, _sample);
           this.itemSystem.spawnDashRings(r.pos, _sample.tangent, _sample.up, 0x22d3ee, true);
@@ -2741,6 +2754,7 @@ export class RaceEngine {
       totalTimeMs: r.finished ? r.finishTimeMs : this.raceElapsedMs,
       bestLapMs: r.bestLapMs,
       accentHex: r.accentHex,
+      finished: r.finished,
     }));
 
     const playerRank = (standings.find((s) => s.isPlayer)?.rank) ?? 1;
@@ -2853,6 +2867,23 @@ export class RaceEngine {
       }
     }
 
+    let bestGhostProgressNorm: number | null = null;
+    if (
+      this.gameMode === 'time_attack' &&
+      this.showBestGhost &&
+      this.bestGhostCurve &&
+      (this.phase === 'countdown' ||
+        this.phase === 'racing' ||
+        this.phase === 'finishing' ||
+        this.phase === 'paused')
+    ) {
+      const rawProg =
+        this.phase === 'countdown'
+          ? 0
+          : sampleGhostProgressAtTime(this.bestGhostCurve, this.raceElapsedMs);
+      bestGhostProgressNorm = THREE.MathUtils.clamp(rawProg / totalLaps, 0, 1);
+    }
+
     this.onTelemetry({
       phase: this.phase,
       gameMode: this.gameMode,
@@ -2868,6 +2899,7 @@ export class RaceEngine {
       manualGauge: this.manualGauge,
       hasBestGhost: Boolean(this.bestGhostRec),
       hasLastGhost: Boolean(this.lastGhostRec),
+      bestGhostProgressNorm,
       rank: playerRank,
       totalRacers: this.racers.length,
       lap: Math.min(this.playerRacer.lap, totalLaps),

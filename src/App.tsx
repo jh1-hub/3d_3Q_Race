@@ -30,6 +30,7 @@ const INITIAL_TELEMETRY: RaceTelemetry = {
   manualGauge: 0,
   hasBestGhost: false,
   hasLastGhost: false,
+  bestGhostProgressNorm: null,
   rank: 4,
   totalRacers: 4,
   lap: 1,
