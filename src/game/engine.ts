@@ -315,6 +315,7 @@ export class RaceEngine {
   private assistedLaneIndex: number | null = null;
   private manualGauge = 0;
   private currentSegmentS = 0.486;
+  private aiMissSurgeTimer = 0;
 
   private onTelemetry: (telemetry: RaceTelemetry) => void;
   private onContextLostCb: (lost: boolean) => void;
@@ -676,6 +677,7 @@ export class RaceEngine {
     this.quizFeedbackTimer = 0;
     this.assistedLaneIndex = null;
     this.manualGauge = 0;
+    this.aiMissSurgeTimer = 0;
     this.updateCurrentSegmentS(this.playerRacer.s);
     this.prevBestGhostFlags = 0;
     this.prevLastGhostFlags = 0;
@@ -737,6 +739,7 @@ export class RaceEngine {
     this.quizFeedbackTimer = 0;
     this.assistedLaneIndex = null;
     this.manualGauge = 0;
+    this.aiMissSurgeTimer = 0;
     this.recordedFrames = [];
     this.emitTelemetry();
   }
@@ -1231,6 +1234,9 @@ export class RaceEngine {
     ) {
       this.raceElapsedMs += dt * 1000;
       if (this.phase === 'racing') {
+        if (this.aiMissSurgeTimer > 0) {
+          this.aiMissSurgeTimer = Math.max(0, this.aiMissSurgeTimer - dt);
+        }
         this.updateQuizSchedule();
       } else if (this.phase === 'finishing') {
         this.finishCelebrationTimer -= dt;
@@ -1629,22 +1635,22 @@ export class RaceEngine {
           rubberBand = 1.06;
         }
       } else {
-        // Normal class: honest pace — steady if player falls behind, competitive if player answers cleanly
+        // Normal class: competitive honest pace — stays steady if player falls behind instead of waiting
         if (gap > 0.08) {
-          rubberBand = 1.12;
+          rubberBand = 1.14;
         } else if (gap > 0.02) {
-          rubberBand = THREE.MathUtils.clamp(0.99 + gap * 2.2, 0.99, 1.10);
+          rubberBand = THREE.MathUtils.clamp(1.01 + gap * 2.2, 1.01, 1.12);
         } else if (gap < -0.02) {
-          rubberBand = THREE.MathUtils.clamp(0.97 + gap * 0.25, 0.92, 0.97);
+          rubberBand = THREE.MathUtils.clamp(1.00 + gap * 0.14, 0.97, 1.00);
         } else {
-          rubberBand = 0.97;
+          rubberBand = 1.01;
         }
       }
     } else {
-      // Final sprint after Gate 1: stay naturally fast without sudden deceleration
+      // Final sprint after Gate 1: stay naturally fast without slowing down to hand over wins
       rubberBand = isHard
-        ? THREE.MathUtils.clamp(1.01 + gap * 0.20, 0.96, 1.04)
-        : THREE.MathUtils.clamp(0.96 + gap * 0.20, 0.91, 0.98);
+        ? THREE.MathUtils.clamp(1.02 + gap * 0.20, 0.98, 1.05)
+        : THREE.MathUtils.clamp(0.99 + gap * 0.18, 0.96, 1.01);
     }
 
     // Fixed reference speed (~VALKYRIE-X class) so player's machine choice genuinely differentiates pace vs handling
@@ -1654,7 +1660,13 @@ export class RaceEngine {
         ? Math.max(baseAiSpeed, this.playerRacer.speed * 1.18)
         : baseAiSpeed;
 
-    const finalLapEase = isFinalStretch ? (isHard ? 0.97 : 0.94) : 1.0;
+    const finalLapEase = isFinalStretch ? (isHard ? 0.99 : 0.98) : 1.0;
+    const missSurgeMult =
+      !r.isPlayer && !r.finished && this.aiMissSurgeTimer > 0
+        ? isHard
+          ? 1.13
+          : 1.10
+        : 1.0;
     const glowMult = r.glowBoostTimer > 0 ? 1.16 : 1.0;
     const hoverMult = r.hoverGlideTimer > 0 ? 1.10 : 1.0;
 
@@ -1662,6 +1674,7 @@ export class RaceEngine {
       playerFollowCap *
       r.aiBaseSpeedFactor *
       finalLapEase *
+      missSurgeMult *
       (r.hitSpinTimer > 0 ? 0.50 : 1.0) *
       (r.isPlayer && this.phase === 'finishing'
         ? 0.94
@@ -2040,8 +2053,10 @@ export class RaceEngine {
       }
       this.quizFeedbackTimer = 8.0;
     } else {
-      // Wrong answer: reset streak, preserve manualGauge so player can carry progress into next gate
+      // Wrong answer: reset streak, preserve manualGauge, and covertly surge AI rivals briefly
       this.quizStreak = 0;
+      const surgeAdd = this.speedClass === 'hard' ? 7.5 : 6.0;
+      this.aiMissSurgeTimer = Math.min(11.0, this.aiMissSurgeTimer + surgeAdd);
       this.missedQuestions.push({
         termId: quiz.targetTerm.term.id,
         termName: correctChoice.term.name,
@@ -2172,7 +2187,9 @@ export class RaceEngine {
         this.pushEventNotice(enhanced ? '5-Way Spread Missile 発射！' : 'Spread Missile 発射！');
       }
     } else if (item === 'leader_bomb') {
-      const sorted = [...this.racers].sort((a, b) => this.getTotalProgress(b) - this.getTotalProgress(a));
+      const activeRacers = this.racers.filter((o) => !o.finished);
+      const candidates = activeRacers.length > 1 ? activeRacers : this.racers;
+      const sorted = [...candidates].sort((a, b) => this.getTotalProgress(b) - this.getTotalProgress(a));
       const target = sorted.find((o) => o.id !== r.id) ?? sorted[0];
       if (target) {
         this.itemSystem.spawnBombStrike(r.id, target.id, target.s, target.lateral, r.itemPower);
@@ -2329,17 +2346,17 @@ export class RaceEngine {
       }
     }
 
-    // 3. Orbital 1st-Place Strike (SatelliteLaser) — nearly guaranteed unless shielded or timed boost dodge
+    // 3. Orbital 1st-Place Strike (SatelliteLaser) — guaranteed lock-on against AI rivals; player can timed-boost dodge
     for (let i = this.itemSystem.bombStrikes.length - 1; i >= 0; i--) {
       const b = this.itemSystem.bombStrikes[i];
       const target = this.racers.find((r) => r.id === b.targetId);
 
       if (!b.detonated) {
         b.lockTimer -= dt;
-        const targetBoosting = Boolean(
-          target && (target.superTurboTimer > 0 || target.accelSurgeTimer > 0.25)
+        const playerBoostDodge = Boolean(
+          target?.isPlayer && (target.superTurboTimer > 0 || target.accelSurgeTimer > 0.25)
         );
-        const lockCutoff = targetBoosting ? 0.16 : 0.04;
+        const lockCutoff = playerBoostDodge ? 0.14 : 0;
         if (target && b.lockTimer > lockCutoff) {
           b.s = target.s;
           b.lateral = target.lateral;
@@ -2360,9 +2377,16 @@ export class RaceEngine {
             if (r.id === b.ownerId) continue;
             if (r.pos.distanceTo(strikePos) <= b.blastRadius) {
               if (r.isPlayer) playerHitOrBlocked = true;
+              const hadShield = r.shieldTimer > 0;
+              const prevGrace = r.postHitGraceTimer;
               this.applyHitToRacer(r, 'SatelliteLaser', b.stunDuration);
               if (b.ownerId === this.playerRacer.id && !r.isPlayer) {
-                this.pushEventNotice(`SATELLITE LASER! ${r.name}`);
+                if (r.postHitGraceTimer > prevGrace) {
+                  this.audio.playHitImpact();
+                  this.pushEventNotice(`HIT! ${r.name} ← SatelliteLaser`);
+                } else if (hadShield) {
+                  this.pushEventNotice(`SHIELD BLOCKED: ${r.name}`);
+                }
               }
             }
           }

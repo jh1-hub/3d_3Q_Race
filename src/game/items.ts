@@ -896,7 +896,7 @@ export class TrackItemSystem {
       blastTimer: 0.85,
       detonated: false,
       damageApplied: false,
-      blastRadius: enhanced ? 13.8 : 11.5,
+      blastRadius: enhanced ? 14.5 : 12.5,
       stunDuration: 1.45 * Math.min(1.3, itemPower),
       group,
       reticleMesh,
