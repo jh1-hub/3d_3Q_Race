@@ -100,6 +100,7 @@ interface RacerState {
   aiLastGateKey: string;
   aiTargetOffset: number;
   aiBaseSpeedFactor: number;
+  aiChaseScale: number;
 }
 
 export interface TouchInputState {
@@ -767,6 +768,7 @@ export class RaceEngine {
       accent: number;
       hex: string;
       speedFactor: number;
+      chaseScale: number;
       offset: number;
       itemPower: number;
     }[] = [
@@ -778,9 +780,10 @@ export class RaceEngine {
         secondary: 0xf59e0b,
         accent: 0xfbbf24,
         hex: '#F59E0B',
-        speedFactor: 1.0,
+        speedFactor: 1.0, // Ace top-speed rival
+        chaseScale: 1.0,
         offset: -4.2,
-        itemPower: 1.0,
+        itemPower: 0.95,
       },
       {
         id: 'ai-2',
@@ -790,9 +793,10 @@ export class RaceEngine {
         secondary: 0xef4444,
         accent: 0xf43f5e,
         hex: '#F43F5E',
-        speedFactor: 0.975,
+        speedFactor: 0.94, // Tactical item-specialist rival
+        chaseScale: 0.45,
         offset: 4.2,
-        itemPower: 1.05,
+        itemPower: 1.18,
       },
       {
         id: 'ai-3',
@@ -802,9 +806,10 @@ export class RaceEngine {
         secondary: 0xd1fae5,
         accent: 0x10b981,
         hex: '#10B981',
-        speedFactor: 0.955,
+        speedFactor: 0.905, // Steady cruiser rival
+        chaseScale: 0.25,
         offset: -1.8,
-        itemPower: 0.95,
+        itemPower: 1.0,
       },
     ];
 
@@ -859,6 +864,7 @@ export class RaceEngine {
       aiLastGateKey: '',
       aiTargetOffset: 0,
       aiBaseSpeedFactor: 1,
+      aiChaseScale: 1,
     };
     this.racers.push(player);
     this.playerRacer = player;
@@ -915,6 +921,7 @@ export class RaceEngine {
           aiLastGateKey: '',
           aiTargetOffset: cfg.offset,
           aiBaseSpeedFactor: cfg.speedFactor,
+          aiChaseScale: cfg.chaseScale,
         });
       });
     }
@@ -1517,7 +1524,19 @@ export class RaceEngine {
     const shieldBonus = r.shieldTimer > 0 ? 1.04 + 0.04 * r.itemPower : 1.0;
     const glowBonus = glowActive ? (r.itemPower >= 1.3 ? 1.24 : 1.16) : 1.0;
     const hoverBonus = hoverActive ? (r.itemPower >= 1.3 ? 1.16 : 1.10) : 1.0;
-    const turboSpeedMult = superTurbo ? 1.46 : r.accelSurgeTimer > 0 ? 1.32 : 1.0;
+    const streakTurboBonus =
+      superTurbo && this.quizStreak >= 2
+        ? Math.min(0.08, (this.quizStreak - 1) * 0.016)
+        : 0;
+    const streakSurgeBonus =
+      !superTurbo && r.accelSurgeTimer > 0 && this.quizStreak >= 2
+        ? Math.min(0.05, (this.quizStreak - 1) * 0.01)
+        : 0;
+    const turboSpeedMult = superTurbo
+      ? 1.46 + streakTurboBonus
+      : r.accelSurgeTimer > 0
+        ? 1.32 + streakSurgeBonus
+        : 1.0;
     const turboAccelMult = superTurbo ? 2.4 : r.accelSurgeTimer > 0 ? 1.85 : glowActive ? 1.45 : 1.0;
     const activeMaxSpeed =
       baseMaxSpeed * hitPenalty * shieldBonus * Math.max(turboSpeedMult, glowBonus) * hoverBonus;
@@ -1620,51 +1639,44 @@ export class RaceEngine {
       this.playerRacer.s >= QUIZ_ROW_S[0] &&
       this.playerRacer.s < 0.995;
 
-    let rubberBand: number;
     const isHard = this.speedClass === 'hard';
+    let chaseExcess = 0;
     if (!isFinalStretch && !this.playerRacer.finished) {
       if (isHard) {
-        // Hard class: relentless pace (never waits when ahead) + aggressive chase buff when trailing
         if (gap > 0.06) {
-          rubberBand = 1.28;
+          chaseExcess = 0.24;
         } else if (gap > 0.01) {
-          rubberBand = THREE.MathUtils.clamp(1.05 + gap * 4.6, 1.05, 1.25);
-        } else {
-          rubberBand = 1.01;
+          chaseExcess = THREE.MathUtils.clamp(0.04 + gap * 4.2, 0.04, 0.22);
         }
       } else {
-        // Normal class: strong baseline without waiting + chase acceleration buff to keep battles intense
         if (gap > 0.08) {
-          rubberBand = 1.16;
+          chaseExcess = 0.15;
         } else if (gap > 0.015) {
-          rubberBand = THREE.MathUtils.clamp(1.02 + gap * 2.4, 1.02, 1.15);
-        } else {
-          rubberBand = 1.0;
+          chaseExcess = THREE.MathUtils.clamp(0.02 + gap * 2.2, 0.02, 0.14);
         }
       }
     } else if (!this.playerRacer.finished && gap > 0.015) {
-      // Final sprint while trailing: keep chasing hard without slowing down
-      rubberBand = isHard
-        ? THREE.MathUtils.clamp(1.04 + gap * 3.5, 1.04, 1.20)
-        : THREE.MathUtils.clamp(1.01 + gap * 2.0, 1.01, 1.12);
-    } else {
-      // Final sprint when ahead or after player finishes: full pace through the line
-      rubberBand = isHard ? 1.01 : 1.0;
+      chaseExcess = isHard
+        ? THREE.MathUtils.clamp(0.04 + gap * 3.0, 0.04, 0.18)
+        : THREE.MathUtils.clamp(0.01 + gap * 1.8, 0.01, 0.10);
     }
 
-    // Elevated AI baseline (~468 km/h Normal / ~546 km/h Hard) so 1st place demands accuracy + driving skill
-    const hardAiExtra = isHard ? 1.06 : 1.0;
-    const baseAiSpeed = (468 / 3.6) * classMultiplier * hardAiExtra;
+    // Never wait below 1.00; only the Ace rival gets full chase pressure while pack rivals hold distinct paces
+    const rubberBand = (isHard ? 1.01 : 1.0) + chaseExcess * r.aiChaseScale;
+
+    // Distinct rival archetypes: SOLARIS-7 (~458 km/h Ace), CRIMSON-IX (~430 km/h Item), AERO-TITAN (~415 km/h Steady)
+    const hardAiExtra = isHard ? 1.045 : 1.0;
+    const baseAiSpeed = (458 / 3.6) * classMultiplier * hardAiExtra;
     const playerFollowCap =
-      isHard && !isFinalStretch && gap > 0.012
-        ? Math.max(baseAiSpeed, this.playerRacer.speed * 1.12)
+      isHard && !isFinalStretch && gap > 0.012 && r.aiChaseScale >= 0.8
+        ? Math.max(baseAiSpeed, this.playerRacer.speed * 1.08)
         : baseAiSpeed;
 
     const missSurgeMult =
       !r.isPlayer && !r.finished && this.aiMissSurgeTimer > 0
         ? isHard
-          ? 1.13
-          : 1.10
+          ? 1.12
+          : 1.09
         : 1.0;
     const glowMult = r.glowBoostTimer > 0 ? 1.16 : 1.0;
     const hoverMult = r.hoverGlideTimer > 0 ? 1.10 : 1.0;
@@ -1959,15 +1971,13 @@ export class RaceEngine {
       this.manualGauge = 0;
       const classMultiplier = this.speedClass === 'hard' ? 1.10 : 1.0;
       const baseMax = (this.getSelectedSpec().maxSpeedKmh / 3.6) * classMultiplier;
-      const streakExtraSec = Math.min(1.4, Math.max(0, (this.quizStreak - 1) * 0.35));
+      const streakExtraSec = Math.min(2.25, Math.max(0, (this.quizStreak - 1) * 0.45));
+      const streakSpeedBoost = Math.min(0.10, Math.max(0, (this.quizStreak - 1) * 0.02));
       const boostLaneActive = !isTimeAttack && choice.itemKind === 'boost';
 
       const gaugeSurgeDur = (3.2 + 1.2 * gaugeFactor) * r.itemPower + streakExtraSec;
-      const normalLaneSpeedMult = Math.max(
-        this.quizStreak >= 3 ? 1.32 : 1.24,
-        1.24 + 0.14 * gaugeFactor
-      );
-      const boostLaneSpeedMult = 1.42 + 0.06 * gaugeFactor;
+      const normalLaneSpeedMult = 1.24 + 0.14 * gaugeFactor + streakSpeedBoost;
+      const boostLaneSpeedMult = 1.42 + 0.06 * gaugeFactor + streakSpeedBoost * 0.5;
 
       r.accelSurgeTimer = Math.max(r.accelSurgeTimer, gaugeSurgeDur);
       r.speed = Math.max(
@@ -1976,15 +1986,18 @@ export class RaceEngine {
       );
 
       const manualTurbo = gaugeFactor > 0.05 ? 2.2 * gaugeFactor : 0;
-      if (boostLaneActive || this.quizStreak >= 3 || manualTurbo > 0) {
-        const streakTurbo =
-          this.quizStreak >= 3 ? 1.5 + Math.min(1.2, (this.quizStreak - 3) * 0.4) : 0;
+      const streakTurbo =
+        this.quizStreak >= 2 ? 1.2 + Math.min(2.4, (this.quizStreak - 2) * 0.6) : 0;
+      if (boostLaneActive || streakTurbo > 0 || manualTurbo > 0) {
         r.superTurboTimer = Math.max(
           r.superTurboTimer,
-          boostLaneActive ? Math.max(3.6 * r.itemPower, manualTurbo) : Math.max(streakTurbo, manualTurbo)
+          boostLaneActive ? Math.max(3.6 * r.itemPower, streakTurbo, manualTurbo) : Math.max(streakTurbo, manualTurbo)
         );
-        if (boostLaneActive || this.quizStreak >= 3) {
-          r.accelSurgeTimer = Math.max(r.accelSurgeTimer, (4.0 + 0.4 * gaugeFactor) * r.itemPower);
+        if (boostLaneActive || this.quizStreak >= 2) {
+          r.accelSurgeTimer = Math.max(
+            r.accelSurgeTimer,
+            (4.0 + 0.4 * gaugeFactor) * r.itemPower + streakExtraSec * 0.75
+          );
         }
       }
 
@@ -2002,7 +2015,7 @@ export class RaceEngine {
       this.audio.playItemPickup();
       this.audio.playBoostPad();
       this.track.sampleAtS(r.s, _sample);
-      const bigBoost = boostLaneActive || this.quizStreak >= 3 || manualMaxed;
+      const bigBoost = boostLaneActive || this.quizStreak >= 2 || manualMaxed;
       this.itemSystem.spawnDashRings(
         r.pos,
         _sample.tangent,
