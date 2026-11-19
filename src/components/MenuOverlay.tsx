@@ -82,8 +82,6 @@ export function MenuOverlay({
   onOpenSettings,
   onToggleSound,
 }: MenuOverlayProps) {
-  const [mobileTab, setMobileTab] = useState<'course' | 'machine'>('course');
-
   const collectionProgress = getCollectionProgress(collection);
   const totalTermCount = collectionProgress.totalTerms;
   const collectedCount = collectionProgress.collectedTerms;
@@ -432,10 +430,10 @@ export function MenuOverlay({
     <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-6 overflow-hidden">
       {/* Top Header: Title + Top Mode Switcher + Parts Collection + Settings */}
       <div className="flex flex-col gap-2">
-        <div className="flex items-start justify-between gap-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="pointer-events-auto min-w-0">
-            <div className="flex items-baseline gap-2.5 sm:gap-3.5">
-              <h1 className="font-display text-2xl sm:text-5xl font-bold tracking-tight text-white leading-none shrink-0">
+            <div className="flex items-baseline gap-2 sm:gap-3.5">
+              <h1 className="font-display text-xl sm:text-5xl font-bold tracking-tight text-white leading-none shrink-0">
                 HYPERION <span className="text-cyan-400">GP</span>
               </h1>
               <div
@@ -445,12 +443,12 @@ export function MenuOverlay({
                 <span className="hidden sm:inline font-display text-[10px] font-semibold tracking-wider text-slate-400">
                   PROGRESS
                 </span>
-                <span className="text-sm sm:text-xl font-bold text-emerald-400">
+                <span className="text-xs sm:text-xl font-bold text-emerald-400">
                   {collectionProgress.progressPercent.toFixed(1)}%
                 </span>
               </div>
             </div>
-            <p className="mt-1 text-[11px] sm:text-sm text-slate-300 truncate">
+            <p className="mt-1 hidden md:block text-sm text-slate-300 truncate">
               {activeSubCourse.fullName} · {activeCourse.categoryLabel}
               {activeSubCourse.subcategoryId ? ' · 2 LAPS' : ''}
             </p>
@@ -488,14 +486,14 @@ export function MenuOverlay({
             <button
               type="button"
               onClick={onOpenCollection}
-              className="flex min-h-[44px] items-center gap-1.5 sm:gap-2 rounded-xl border border-amber-400/35 bg-[#070b14]/92 px-2.5 py-1.5 sm:px-3.5 sm:py-2 text-left transition-colors hover:border-amber-300 hover:bg-amber-500/10 cursor-pointer whitespace-nowrap shrink-0"
+              className="flex min-h-[40px] sm:min-h-[44px] items-center gap-1.5 sm:gap-2 rounded-xl border border-amber-400/35 bg-[#070b14]/92 px-2 py-1 sm:px-3.5 sm:py-2 text-left transition-colors hover:border-amber-300 hover:bg-amber-500/10 cursor-pointer whitespace-nowrap shrink-0"
             >
-              <Cpu className="h-4 w-4 sm:h-4.5 sm:w-4.5 text-amber-400 shrink-0" />
+              <Cpu className="h-3.5 w-3.5 sm:h-4.5 sm:w-4.5 text-amber-400 shrink-0" />
               <div>
-                <div className="text-[10px] font-semibold tracking-wide text-amber-300 leading-tight">
+                <div className="text-[9px] sm:text-[10px] font-semibold tracking-wide text-amber-300 leading-tight">
                   Parts Collection
                 </div>
-                <div className="font-mono-num text-xs sm:text-sm font-bold text-white leading-tight">
+                <div className="font-mono-num text-[11px] sm:text-sm font-bold text-white leading-tight">
                   {collectedCount} / {totalTermCount}
                 </div>
               </div>
@@ -527,16 +525,16 @@ export function MenuOverlay({
               onClick={onToggleSound}
               aria-label={soundMuted ? 'サウンドをオンにする' : 'サウンドをオフにする'}
               title={soundMuted ? 'サウンド OFF（タップでON）' : 'サウンド ON（タップでOFF）'}
-              className={`flex h-11 w-11 items-center justify-center rounded-xl border transition-colors cursor-pointer shrink-0 ${
+              className={`flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-xl border transition-colors cursor-pointer shrink-0 ${
                 soundMuted
                   ? 'border-white/12 bg-[#070b14]/92 text-slate-500 hover:text-slate-300'
                   : 'border-cyan-400/45 bg-[#070b14]/92 text-cyan-400 hover:border-cyan-300'
               }`}
             >
               {soundMuted ? (
-                <VolumeX className="h-4.5 w-4.5" />
+                <VolumeX className="h-4 w-4 sm:h-4.5 sm:w-4.5" />
               ) : (
-                <Volume2 className="h-4.5 w-4.5" />
+                <Volume2 className="h-4 w-4 sm:h-4.5 sm:w-4.5" />
               )}
             </button>
 
@@ -545,9 +543,9 @@ export function MenuOverlay({
               onClick={onOpenSettings}
               aria-label="設定"
               title="設定・ランキング"
-              className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/15 bg-[#070b14]/92 text-slate-200 transition-colors hover:border-cyan-400/60 hover:text-white cursor-pointer shrink-0"
+              className="flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-xl border border-white/15 bg-[#070b14]/92 text-slate-200 transition-colors hover:border-cyan-400/60 hover:text-white cursor-pointer shrink-0"
             >
-              <Settings className="h-4.5 w-4.5 text-cyan-400" />
+              <Settings className="h-4 w-4 sm:h-4.5 sm:w-4.5 text-cyan-400" />
             </button>
           </div>
         </div>
@@ -581,242 +579,140 @@ export function MenuOverlay({
         </div>
       </div>
 
-      {/* Mobile-Optimized Tabbed Hangar Dock (< md) */}
-      <div className="pointer-events-auto md:hidden mx-auto w-full max-w-lg rounded-2xl border border-white/12 bg-[#070b14]/94 p-3 shadow-2xl">
-        {/* Mobile Tab Switcher (Course / Machine) */}
-        <div className="mb-2.5 grid grid-cols-2 gap-1.5 rounded-xl bg-slate-900/90 p-1">
-          <button
-            type="button"
-            onClick={() => setMobileTab('course')}
-            className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
-              mobileTab === 'course'
-                ? 'bg-cyan-500 text-slate-950'
-                : 'text-slate-300 hover:text-white'
-            }`}
+      {/* Mobile-Optimized Slim List Dock (< md): Clean dropdown selectors, no clutter */}
+      <div className="pointer-events-auto md:hidden mx-auto w-full max-w-lg rounded-2xl border border-white/12 bg-[#070b14]/92 p-3 shadow-2xl space-y-2">
+        {/* Course Dropdown */}
+        <div className="relative">
+          <MapPin
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
+            style={{ color: activeSubCourse.accentHex }}
+          />
+          <select
+            aria-label="コース選択"
+            value={selectedCourse}
+            onChange={(e) => onSelectCourseKey(e.target.value)}
+            className="min-h-[42px] w-full appearance-none rounded-xl border border-white/15 bg-slate-950/90 pl-9 pr-9 text-xs font-bold text-white focus:border-cyan-400 focus:outline-none cursor-pointer"
           >
-            <MapPin className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">コース選択</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setMobileTab('machine')}
-            className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
-              mobileTab === 'machine'
-                ? 'bg-cyan-500 text-slate-950'
-                : 'text-slate-300 hover:text-white'
-            }`}
-          >
-            <Car className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">マシン選択</span>
-          </button>
+            {COURSES.map((course) => (
+              <option key={course.id} value={course.id}>
+                {course.jpName} · {course.categoryLabel}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
         </div>
 
-        {/* Mobile Tab Content */}
-        {mobileTab === 'course' ? (
-          <div className="space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              {COURSES.map((course) => {
-                const isSelected = course.id === selectedCourse;
-                const displayAccent = isSelected ? activeSubCourse.accentHex : course.accentHex;
-                return (
-                  <button
-                    key={course.id}
-                    type="button"
-                    onClick={() => {
-                      if (!isSelected) onSelectCourseKey(course.id);
-                    }}
-                    className={`flex min-h-[56px] flex-col justify-between rounded-xl border px-3 py-2 text-left transition-colors cursor-pointer ${
-                      isSelected
-                        ? 'bg-slate-900'
-                        : 'border-white/10 bg-slate-900/55 hover:border-white/25'
-                    }`}
-                    style={
-                      isSelected
-                        ? {
-                            borderColor: displayAccent,
-                            boxShadow: `0 0 14px ${displayAccent}2a`,
-                          }
-                        : undefined
-                    }
-                  >
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span className="font-display text-xs font-bold text-white truncate">
-                        {course.jpName}
-                      </span>
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-sm"
-                        style={{ backgroundColor: displayAccent }}
-                      />
-                    </div>
-                    <span
-                      className="mt-1 truncate text-[10px] font-semibold"
-                      style={{ color: isSelected ? displayAccent : '#94a3b8' }}
-                    >
-                      {course.categoryLabel}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {selectedCourse !== 'orbital' && subCourses.length > 1 && (
-              <div className="rounded-xl border border-white/12 bg-slate-900/80 p-2">
-                <div className="mb-1 flex items-center justify-between gap-2 px-1 text-[10px] font-semibold text-slate-400">
-                  <span className="flex items-center gap-1 text-slate-300">
-                    <Layers className="h-3 w-3" style={{ color: activeSubCourse.accentHex }} />
-                    別コース（サブカテゴリ選択）
-                  </span>
-                  <span className="font-mono-num" style={{ color: activeSubCourse.accentHex }}>
-                    {activeSubCourse.termCount}語
-                    {activeSubCourse.subcategoryId ? ' · 2LAP' : ''}
-                  </span>
-                </div>
-                <div className="relative">
-                  <select
-                    aria-label="サブカテゴリコース選択"
-                    value={activeSubCourse.courseKey}
-                    onChange={(e) => onSelectCourseKey(e.target.value)}
-                    className="min-h-[44px] w-full appearance-none rounded-lg border border-white/15 bg-slate-950 px-3 py-2 pr-9 text-xs font-bold text-white focus:border-cyan-400 focus:outline-none cursor-pointer"
-                  >
-                    {subCourses.map((sc) => (
-                      <option key={sc.courseKey} value={sc.courseKey}>
-                        {sc.subcategoryId ? `別コース：${sc.title} (2周)` : sc.title}（{sc.termCount}語）
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-2">
-            {MACHINES.map((m) => {
-              const selected = m.id === selectedMachine;
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => onSelectMachine(m.id)}
-                  className={`flex min-h-[60px] items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-colors cursor-pointer ${
-                    selected
-                      ? 'border-cyan-400 bg-cyan-500/14'
-                      : 'border-white/10 bg-slate-900/65 hover:border-white/25'
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="h-3 w-3 rounded-sm shrink-0"
-                        style={{ backgroundColor: m.accentHex }}
-                      />
-                      <span className="font-display text-sm font-bold text-white truncate">
-                        {m.name}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 text-[11px] text-slate-300">{m.subtitle}</div>
-                  </div>
-                  <div className="flex flex-col gap-1 w-30 shrink-0 font-display text-[10px] tracking-wider text-slate-300">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span>SPEED</span>
-                      <div className="h-1.5 w-16 overflow-hidden rounded-sm bg-slate-800">
-                        <div className="h-full bg-cyan-400" style={{ width: `${m.stats.speed}%` }} />
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span>ACCEL</span>
-                      <div className="h-1.5 w-16 overflow-hidden rounded-sm bg-slate-800">
-                        <div className="h-full bg-amber-400" style={{ width: `${m.stats.accel}%` }} />
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span>ITEM</span>
-                      <div className="h-1.5 w-16 overflow-hidden rounded-sm bg-slate-800">
-                        <div className="h-full bg-purple-400" style={{ width: `${m.stats.itemPower}%` }} />
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
+        {/* Subcategory Dropdown (only when non-orbital course has subcategories) */}
+        {selectedCourse !== 'orbital' && subCourses.length > 1 && (
+          <div className="relative">
+            <Layers
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
+              style={{ color: activeSubCourse.accentHex }}
+            />
+            <select
+              aria-label="サブカテゴリコース選択"
+              value={activeSubCourse.courseKey}
+              onChange={(e) => onSelectCourseKey(e.target.value)}
+              className="min-h-[42px] w-full appearance-none rounded-xl border border-white/15 bg-slate-950/90 pl-9 pr-9 text-xs font-bold text-white focus:border-cyan-400 focus:outline-none cursor-pointer"
+            >
+              {subCourses.map((sc) => (
+                <option key={sc.courseKey} value={sc.courseKey}>
+                  {sc.subcategoryId ? `${sc.title} (2 LAPS)` : sc.title}（{sc.termCount}語）
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           </div>
         )}
 
-        {/* Mobile Time Attack Ghost Toggles & Best Total */}
+        {/* Machine Dropdown + NORMAL/HARD Class Toggle */}
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1 min-w-0">
+            <Car
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
+              style={{ color: activeSpec.accentHex }}
+            />
+            <select
+              aria-label="マシン選択"
+              value={selectedMachine}
+              onChange={(e) => onSelectMachine(e.target.value as MachineId)}
+              className="min-h-[42px] w-full appearance-none rounded-xl border border-white/15 bg-slate-950/90 pl-9 pr-8 text-xs font-bold text-white focus:border-cyan-400 focus:outline-none cursor-pointer truncate"
+            >
+              {MACHINES.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}（{m.subtitle}）
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          </div>
+
+          <div className="flex items-center gap-1 rounded-xl bg-slate-900 p-1 shrink-0">
+            <button
+              type="button"
+              onClick={() => onSelectClass('normal')}
+              className={`min-h-[34px] rounded-lg px-2.5 py-1 text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                speedClass === 'normal'
+                  ? 'bg-cyan-500 text-slate-950'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              NORMAL
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectClass('hard')}
+              className={`min-h-[34px] rounded-lg px-2.5 py-1 text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                speedClass === 'hard'
+                  ? 'bg-amber-500 text-slate-950'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              HARD
+            </button>
+          </div>
+        </div>
+
+        {/* Mobile Time Attack Ghost Toggles & Best Total (Compact 1-Row) */}
         {isTimeAttack && (
-          <div className="mt-2.5 space-y-2">
-            <div className="flex items-center justify-between rounded-lg border border-white/10 bg-slate-900/75 px-3 py-1.5 text-[11px]">
-              <span className="font-display tracking-wider text-slate-400">BEST TOTAL TIME</span>
-              <span className="font-mono-num font-bold text-cyan-300">
+          <div className="flex items-center gap-1.5">
+            <div className="flex flex-col rounded-lg border border-white/10 bg-slate-900/75 px-2.5 py-1 shrink-0">
+              <span className="font-display text-[9px] tracking-wider text-slate-400 leading-none">
+                BEST TOTAL
+              </span>
+              <span className="mt-0.5 font-mono-num text-[11px] font-bold text-cyan-300 leading-none">
                 {formatRaceTime(telemetry.allTimeBestTotalMs)}
               </span>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={onToggleBestGhost}
-                className={`flex min-h-[38px] items-center justify-between gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors cursor-pointer ${
-                  showBestGhost
-                    ? 'border-amber-400/55 bg-amber-500/15 text-amber-200'
-                    : 'border-white/10 bg-slate-900/60 text-slate-400'
-                }`}
-              >
-                <span className="truncate font-display tracking-wider">BEST GHOST</span>
-                {showBestGhost ? <Eye className="h-3.5 w-3.5 shrink-0" /> : <EyeOff className="h-3.5 w-3.5 shrink-0" />}
-              </button>
-              <button
-                type="button"
-                onClick={onToggleLastGhost}
-                className={`flex min-h-[38px] items-center justify-between gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors cursor-pointer ${
-                  showLastGhost
-                    ? 'border-sky-400/55 bg-sky-500/15 text-sky-200'
-                    : 'border-white/10 bg-slate-900/60 text-slate-400'
-                }`}
-              >
-                <span className="truncate font-display tracking-wider">LAST GHOST</span>
-                {showLastGhost ? <Eye className="h-3.5 w-3.5 shrink-0" /> : <EyeOff className="h-3.5 w-3.5 shrink-0" />}
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={onToggleBestGhost}
+              className={`flex min-h-[36px] flex-1 items-center justify-between gap-1 rounded-lg border px-2 py-1 text-[10px] font-bold transition-colors cursor-pointer ${
+                showBestGhost
+                  ? 'border-amber-400/55 bg-amber-500/15 text-amber-200'
+                  : 'border-white/10 bg-slate-900/60 text-slate-400'
+              }`}
+            >
+              <span className="truncate font-display tracking-wider">BEST</span>
+              {showBestGhost ? <Eye className="h-3.5 w-3.5 shrink-0" /> : <EyeOff className="h-3.5 w-3.5 shrink-0" />}
+            </button>
+            <button
+              type="button"
+              onClick={onToggleLastGhost}
+              className={`flex min-h-[36px] flex-1 items-center justify-between gap-1 rounded-lg border px-2 py-1 text-[10px] font-bold transition-colors cursor-pointer ${
+                showLastGhost
+                  ? 'border-sky-400/55 bg-sky-500/15 text-sky-200'
+                  : 'border-white/10 bg-slate-900/60 text-slate-400'
+              }`}
+            >
+              <span className="truncate font-display tracking-wider">LAST</span>
+              {showLastGhost ? <Eye className="h-3.5 w-3.5 shrink-0" /> : <EyeOff className="h-3.5 w-3.5 shrink-0" />}
+            </button>
           </div>
         )}
 
-        {/* Mobile Thumb-Zone Class Toggle + Launch CTA */}
-        <div className="mt-2.5 flex flex-col gap-2 border-t border-white/10 pt-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <div className="text-[10px] font-semibold text-slate-400">
-                {speedClass === 'hard' ? '未解答・低正答率を優先出題' : '標準クラス · 全問題対象'}
-              </div>
-              <div className="font-display text-xs font-bold text-white truncate">
-                {activeSpec.name} · {activeSubCourse.fullName}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-1 rounded-lg bg-slate-900 p-1 shrink-0">
-              <button
-                type="button"
-                onClick={() => onSelectClass('normal')}
-                className={`min-h-[38px] rounded-md px-3 py-1.5 text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
-                  speedClass === 'normal'
-                    ? 'bg-cyan-500 text-slate-950'
-                    : 'text-slate-300 hover:text-white'
-                }`}
-              >
-                NORMAL
-              </button>
-              <button
-                type="button"
-                onClick={() => onSelectClass('hard')}
-                className={`min-h-[38px] rounded-md px-3 py-1.5 text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
-                  speedClass === 'hard'
-                    ? 'bg-amber-500 text-slate-950'
-                    : 'text-slate-300 hover:text-white'
-                }`}
-              >
-                HARD
-              </button>
-            </div>
-          </div>
+        {/* Mobile Launch CTA */}
+        <div>
 
           <button
             type="button"

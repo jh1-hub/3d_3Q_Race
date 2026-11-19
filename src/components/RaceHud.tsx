@@ -372,13 +372,13 @@ export function RaceHud({
                         type="button"
                         onPointerDown={stopProp}
                         onClick={() => onSelectQuizLane(lane.laneIndex)}
-                        className={`pointer-events-auto flex flex-col justify-between rounded-lg border px-2 py-2 text-left transition-colors cursor-pointer ${
+                        className={`pointer-events-auto min-w-0 flex flex-col justify-start rounded-lg border px-1.5 sm:px-2 py-2 text-left transition-colors cursor-pointer ${
                           isPlayerLane
                             ? 'border-cyan-300 bg-cyan-500/24 ring-1 ring-cyan-300/60'
                             : 'border-white/15 bg-slate-900/85 hover:border-white/35'
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-1 text-[10px] font-mono-num">
+                        <div className="flex w-full items-center justify-between gap-1 text-[10px] font-mono-num">
                           <span className={isPlayerLane ? 'font-bold text-cyan-200' : 'text-slate-400'}>
                             L{lane.laneIndex + 1}
                           </span>
@@ -392,7 +392,7 @@ export function RaceHud({
                             </span>
                           )}
                         </div>
-                        <div className="mt-1 text-center text-[11px] sm:text-xs font-bold leading-tight text-white line-clamp-2">
+                        <div className="mt-1 flex flex-1 w-full items-center justify-center text-center text-[10.5px] sm:text-xs font-bold leading-snug text-white [overflow-wrap:anywhere] whitespace-normal">
                           {lane.termName}
                         </div>
                       </button>
