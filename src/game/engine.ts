@@ -1221,13 +1221,18 @@ export class RaceEngine {
       return;
     }
 
-    // Active Racing, Post-Finish Celebration, or Finished (auto-pilot cooldown)
+    // Active Racing, Post-Finish Celebration, or Finished (keep clock running until all AI racers finish)
     let finishedThisStep = false;
-    if (this.phase === 'racing' || this.phase === 'finishing') {
+    const allFinishedBeforeLoop = this.racers.every((r) => r.finished);
+    if (
+      this.phase === 'racing' ||
+      this.phase === 'finishing' ||
+      (this.phase === 'finished' && !allFinishedBeforeLoop)
+    ) {
       this.raceElapsedMs += dt * 1000;
       if (this.phase === 'racing') {
         this.updateQuizSchedule();
-      } else {
+      } else if (this.phase === 'finishing') {
         this.finishCelebrationTimer -= dt;
         if (this.finishCelebrationTimer <= 0) {
           this.finishCelebrationTimer = 0;
@@ -1346,11 +1351,17 @@ export class RaceEngine {
       this.phase === 'racing' || this.phase === 'finishing'
     );
 
-    // Emit HUD state at ~20Hz for crisp React UI without frame drops
-    this.hudEmitAccum += dt;
-    if (this.hudEmitAccum >= 0.05) {
+    // Emit HUD state at ~20Hz while racing/finishing or while remaining AI racers are still finishing
+    const allFinishedNow = this.racers.every((r) => r.finished);
+    if (this.phase === 'finished' && !allFinishedBeforeLoop && allFinishedNow) {
       this.hudEmitAccum = 0;
       this.emitTelemetry(playerAccelerating);
+    } else if (this.phase !== 'finished' || !allFinishedNow) {
+      this.hudEmitAccum += dt;
+      if (this.hudEmitAccum >= 0.05) {
+        this.hudEmitAccum = 0;
+        this.emitTelemetry(playerAccelerating);
+      }
     }
   }
 
@@ -2774,7 +2785,7 @@ export class RaceEngine {
   private getTotalProgress(r: RacerState): number {
     const totalLaps = this.getTotalLaps();
     if (r.finished) {
-      return totalLaps + 10 - r.finishTimeMs * 0.00001;
+      return totalLaps + 10 - r.finishTimeMs * 0.000001;
     }
     // Note: on grid before crossing line, s is ~0.985 with sectorFlags === 0
     const effectiveS = r.lap === 1 && r.sectorFlags === 0 && r.s > 0.8 ? r.s - 1.0 : r.s;
