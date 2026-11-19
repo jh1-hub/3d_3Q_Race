@@ -35,21 +35,24 @@ import {
   recordTermAnswer,
 } from '../utils/cardCollection';
 import {
+  buildGhostProgressCurve,
   GHOST_FLAG_BOOST,
   GHOST_FLAG_GLOW,
   GHOST_FLAG_HIT_SPIN,
   GHOST_FLAG_HOVER,
   GHOST_FLAG_SUPER_TURBO,
   GhostFrameTuple,
+  GhostProgressCurve,
   GhostRecording,
   GhostSampleOut,
   loadBestGhost,
   loadLastGhost,
   packGhostFrame,
+  sampleGhostAtTime,
+  sampleGhostTimeAtProgress,
   saveTimeAttackGhosts,
 } from '../utils/ghosts';
-import { sampleGhostAtTime } from '../utils/ghosts';
-import { recordTotalTimeRanking } from '../utils/rankings';
+import { getCourseRankings, recordTotalTimeRanking } from '../utils/rankings';
 
 interface RacerState {
   id: string;
@@ -246,6 +249,7 @@ export class RaceEngine {
   private playerRacer!: RacerState;
 
   private bestGhostRec: GhostRecording | null = null;
+  private bestGhostCurve: GhostProgressCurve | null = null;
   private lastGhostRec: GhostRecording | null = null;
   private bestGhostModel: HypercarModel | null = null;
   private lastGhostModel: HypercarModel | null = null;
@@ -273,6 +277,7 @@ export class RaceEngine {
   private hitAlertHex = '#EF4444';
   private hitAlertTimer = 0;
   private allTimeBestLapMs: number | null = null;
+  private allTimeBestTotalMs: number | null = null;
   private isNewRecord = false;
   private rankingPlacement: number | null = null;
   private lastWallSoundTime = 0;
@@ -441,6 +446,23 @@ export class RaceEngine {
     return this.gameMode === 'time_attack' ? `${baseKey}_ta` : baseKey;
   }
 
+  private loadBestTotalForCourse(): void {
+    this.allTimeBestTotalMs = null;
+    if (this.gameMode === 'time_attack') {
+      const ghost = loadBestGhost(this.courseKey, this.speedClass);
+      if (ghost && Number.isFinite(ghost.totalTimeMs) && ghost.totalTimeMs > 0) {
+        this.allTimeBestTotalMs = ghost.totalTimeMs;
+        return;
+      }
+    }
+    if (!this.getCourseSpec().subcategoryId) {
+      const top = getCourseRankings(this.courseId, this.speedClass, this.gameMode)[0];
+      if (top && Number.isFinite(top.totalTimeMs) && top.totalTimeMs > 0) {
+        this.allTimeBestTotalMs = top.totalTimeMs;
+      }
+    }
+  }
+
   private loadBestLapForCourse(courseKey: string): void {
     this.allTimeBestLapMs = null;
     try {
@@ -452,6 +474,7 @@ export class RaceEngine {
     } catch {
       // Ignore storage failures
     }
+    this.loadBestTotalForCourse();
   }
 
   public setCourse(courseKey: string): void {
@@ -490,6 +513,7 @@ export class RaceEngine {
     this.loadBestLapForCourse(this.courseKey);
     this.itemSystem.setShowItems(this.gameMode !== 'time_attack');
     if (this.phase === 'menu') {
+      this.rebuildGhosts();
       this.buildRacers();
       this.resetGridPositions();
       this.emitTelemetry();
@@ -526,6 +550,7 @@ export class RaceEngine {
   public setSpeedClass(cls: SpeedClass): void {
     if (this.speedClass === cls) return;
     this.speedClass = cls;
+    this.loadBestTotalForCourse();
     if (this.phase === 'menu') {
       this.rebuildGhosts();
       this.resetGridPositions();
@@ -841,6 +866,7 @@ export class RaceEngine {
   private rebuildGhosts(): void {
     this.disposeGhostModels();
     this.bestGhostRec = null;
+    this.bestGhostCurve = null;
     this.lastGhostRec = null;
     this.prevBestGhostFlags = 0;
     this.prevLastGhostFlags = 0;
@@ -848,6 +874,7 @@ export class RaceEngine {
     if (this.gameMode !== 'time_attack') return;
 
     this.bestGhostRec = loadBestGhost(this.courseKey, this.speedClass);
+    this.bestGhostCurve = this.bestGhostRec ? buildGhostProgressCurve(this.bestGhostRec) : null;
     this.lastGhostRec = loadLastGhost(this.courseKey, this.speedClass);
     const isRaceView =
       this.phase === 'countdown' ||
@@ -2386,6 +2413,7 @@ export class RaceEngine {
             this.rankingPlacement = null;
           }
 
+          this.loadBestTotalForCourse();
           this.audio.playLapComplete(true);
           this.emitTelemetry(true);
         }
@@ -2739,6 +2767,26 @@ export class RaceEngine {
       };
     }
 
+    let bestGhostDeltaMs: number | null = null;
+    if (
+      this.gameMode === 'time_attack' &&
+      this.bestGhostCurve &&
+      (this.phase === 'racing' || this.phase === 'finishing')
+    ) {
+      const playerProg = this.playerRacer.finished
+        ? totalLaps
+        : this.getTotalProgress(this.playerRacer);
+      if (playerProg >= 0.015) {
+        const ghostTimeMs = sampleGhostTimeAtProgress(this.bestGhostCurve, playerProg);
+        if (ghostTimeMs !== null) {
+          const playerTimeMs = this.playerRacer.finished
+            ? this.playerRacer.finishTimeMs
+            : this.raceElapsedMs;
+          bestGhostDeltaMs = Math.round(playerTimeMs - ghostTimeMs);
+        }
+      }
+    }
+
     this.onTelemetry({
       phase: this.phase,
       gameMode: this.gameMode,
@@ -2763,6 +2811,8 @@ export class RaceEngine {
       bestLapMs: this.playerRacer.bestLapMs,
       totalRaceMs: this.playerRacer.finished ? this.playerRacer.finishTimeMs : this.raceElapsedMs,
       allTimeBestLapMs: this.allTimeBestLapMs,
+      allTimeBestTotalMs: this.allTimeBestTotalMs,
+      bestGhostDeltaMs,
       isNewRecord: this.isNewRecord,
       rankingPlacement: this.rankingPlacement,
       markers,

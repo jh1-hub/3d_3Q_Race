@@ -39,6 +39,8 @@ const INITIAL_TELEMETRY: RaceTelemetry = {
   bestLapMs: null,
   totalRaceMs: 0,
   allTimeBestLapMs: null,
+  allTimeBestTotalMs: null,
+  bestGhostDeltaMs: null,
   isNewRecord: false,
   rankingPlacement: null,
   markers: [],
@@ -103,6 +105,7 @@ export default function App() {
   const [collection, setCollection] = useState<CardCollectionMap>(() => loadCardCollection());
   const [termStats, setTermStats] = useState<TermStats>(() => loadTermStats());
   const [collectionOpen, setCollectionOpen] = useState(false);
+  const [collectionInitialTermId, setCollectionInitialTermId] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const isOnline = useOnlineStatus();
 
@@ -423,6 +426,12 @@ export default function App() {
         onReturnMenu={handleReturnMenu}
         onOpenCollection={() => {
           refreshCollection();
+          setCollectionInitialTermId(null);
+          setCollectionOpen(true);
+        }}
+        onOpenCollectionTerm={(termId) => {
+          refreshCollection();
+          setCollectionInitialTermId(termId);
           setCollectionOpen(true);
         }}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -440,7 +449,11 @@ export default function App() {
         open={collectionOpen}
         collection={collection}
         termStats={termStats}
-        onClose={() => setCollectionOpen(false)}
+        initialTermId={collectionInitialTermId}
+        onClose={() => {
+          setCollectionOpen(false);
+          setCollectionInitialTermId(null);
+        }}
       />
 
       {/* Settings & Rankings Modal */}

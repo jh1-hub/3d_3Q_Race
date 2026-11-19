@@ -193,22 +193,43 @@ export function RaceHud({
             </div>
           </div>
 
-          {/* Time Attack Ghost Legend (when any ghost is active) */}
+          {/* Time Attack Ghost Legend & Live Delta Time */}
           {isTimeAttack &&
-            ((telemetry.hasBestGhost && showBestGhost) ||
+            (telemetry.bestGhostDeltaMs !== null ||
+              (telemetry.hasBestGhost && showBestGhost) ||
               (telemetry.hasLastGhost && showLastGhost)) && (
-              <div className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-[#070b14]/84 px-2.5 py-1 text-[10px] font-mono-num text-slate-300">
-                {telemetry.hasBestGhost && showBestGhost && (
-                  <span className="flex items-center gap-1">
-                    <span className="h-2 w-2 rounded-full bg-amber-400" />
-                    <span>BEST</span>
-                  </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {telemetry.bestGhostDeltaMs !== null && (
+                  <div
+                    className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono-num text-xs font-bold shadow-md ${
+                      telemetry.bestGhostDeltaMs <= 0
+                        ? 'border-emerald-400/50 bg-[#051a14]/90 text-emerald-300'
+                        : 'border-rose-400/50 bg-[#1a070c]/90 text-rose-300'
+                    }`}
+                  >
+                    <span className="font-display text-[10px] tracking-wider opacity-85">VS BEST</span>
+                    <span>
+                      {telemetry.bestGhostDeltaMs > 0 ? '+' : ''}
+                      {(telemetry.bestGhostDeltaMs / 1000).toFixed(2)}s
+                    </span>
+                  </div>
                 )}
-                {telemetry.hasLastGhost && showLastGhost && (
-                  <span className="flex items-center gap-1">
-                    <span className="h-2 w-2 rounded-full bg-sky-400" />
-                    <span>LAST</span>
-                  </span>
+                {((telemetry.hasBestGhost && showBestGhost) ||
+                  (telemetry.hasLastGhost && showLastGhost)) && (
+                  <div className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-[#070b14]/84 px-2.5 py-1 text-[10px] font-mono-num text-slate-300">
+                    {telemetry.hasBestGhost && showBestGhost && (
+                      <span className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full bg-amber-400" />
+                        <span>BEST</span>
+                      </span>
+                    )}
+                    {telemetry.hasLastGhost && showLastGhost && (
+                      <span className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full bg-sky-400" />
+                        <span>LAST</span>
+                      </span>
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -454,7 +475,11 @@ export function RaceHud({
                 ? 'TIME ATTACK COMPLETE'
                 : telemetry.rank === 1
                   ? '1ST PLACE · VICTORY'
-                  : `${telemetry.rank}位 フィニッシュ`}
+                  : telemetry.rank === 2
+                    ? '2ND PLACE'
+                    : telemetry.rank === 3
+                      ? '3RD PLACE'
+                      : `${telemetry.rank}TH PLACE`}
             </div>
           </div>
         )}

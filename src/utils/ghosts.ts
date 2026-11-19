@@ -163,3 +163,75 @@ export function sampleGhostAtTime(
   out.flags = alpha < 0.5 ? a[5] : b[5];
   out.finished = false;
 }
+
+export interface GhostProgressCurve {
+  progresses: Float64Array;
+  timesMs: Float64Array;
+  maxProgress: number;
+}
+
+export function buildGhostProgressCurve(recording: GhostRecording): GhostProgressCurve | null {
+  const frames = recording.frames;
+  const len = frames.length;
+  if (len < 2) return null;
+
+  const progresses = new Float64Array(len);
+  const timesMs = new Float64Array(len);
+
+  let lapOffset = frames[0][1] > 0.8 ? -1 : 0;
+  let prevS = frames[0][1];
+  let prevProg = lapOffset + prevS;
+
+  progresses[0] = prevProg;
+  timesMs[0] = frames[0][0];
+
+  for (let i = 1; i < len; i++) {
+    const curS = frames[i][1];
+    if (prevS > 0.85 && curS < 0.15) {
+      lapOffset += 1;
+    }
+    const rawProg = lapOffset + curS;
+    const monoProg = rawProg >= prevProg ? rawProg : prevProg;
+    progresses[i] = monoProg;
+    timesMs[i] = frames[i][0];
+    prevS = curS;
+    prevProg = monoProg;
+  }
+
+  return {
+    progresses,
+    timesMs,
+    maxProgress: prevProg,
+  };
+}
+
+export function sampleGhostTimeAtProgress(
+  curve: GhostProgressCurve,
+  targetProgress: number
+): number | null {
+  const len = curve.progresses.length;
+  if (len < 2 || targetProgress <= curve.progresses[0]) {
+    return null;
+  }
+  if (targetProgress >= curve.maxProgress) {
+    return curve.timesMs[len - 1];
+  }
+
+  let lo = 0;
+  let hi = len - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (curve.progresses[mid] <= targetProgress) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  const pA = curve.progresses[lo];
+  const pB = curve.progresses[hi];
+  const span = pB - pA;
+  const alpha = span > 1e-7 ? Math.max(0, Math.min(1, (targetProgress - pA) / span)) : 0;
+  return curve.timesMs[lo] + (curve.timesMs[hi] - curve.timesMs[lo]) * alpha;
+}
+

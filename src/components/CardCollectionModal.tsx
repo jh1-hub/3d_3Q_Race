@@ -1,14 +1,20 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, CheckCircle2, Cpu, Lock, Search, Sparkles, X } from 'lucide-react';
 import { quizCategories } from '../data/quizData';
 import { CardCollectionMap, FlatTerm, Rarity, TermStats } from '../types';
-import { getAllFlatTerms, getUnlockedLoreCount, RARITY_META } from '../utils/cardCollection';
+import {
+  getAllFlatTerms,
+  getCollectionProgress,
+  getUnlockedLoreCount,
+  RARITY_META,
+} from '../utils/cardCollection';
 import { getTermEmoji, getTermIcon } from '../utils/termIcon';
 
 interface CardCollectionModalProps {
   open: boolean;
   collection: CardCollectionMap;
   termStats: TermStats;
+  initialTermId?: number | null;
   onClose: () => void;
 }
 
@@ -170,6 +176,7 @@ export function CardCollectionModal({
   open,
   collection,
   termStats,
+  initialTermId = null,
   onClose,
 }: CardCollectionModalProps) {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
@@ -179,6 +186,23 @@ export function CardCollectionModal({
   const [selectedCard, setSelectedCard] = useState<FlatTerm | null>(null);
 
   const allFlatTerms = useMemo(() => getAllFlatTerms(), []);
+
+  useEffect(() => {
+    if (!open) {
+      setSelectedCard(null);
+      return;
+    }
+    if (initialTermId != null) {
+      const target = allFlatTerms.find((item) => item.term.id === initialTermId) ?? null;
+      if (target) {
+        setSelectedCategoryId('all');
+        setRarityFilter('ALL');
+        setOwnershipFilter('all');
+        setSearchQuery('');
+        setSelectedCard(target);
+      }
+    }
+  }, [open, initialTermId, allFlatTerms]);
 
   const summary = useMemo(() => {
     const total = allFlatTerms.length;
@@ -253,7 +277,8 @@ export function CardCollectionModal({
         c.attempts > 0 ? Math.round((c.correct / c.attempts) * 100) : null,
     }));
 
-    const percent = total > 0 ? Math.round((collected / total) * 1000) / 10 : 0;
+    const progress = getCollectionProgress(collection);
+    const percent = progress.progressPercent;
     const accuracyPercent =
       totalAttempts > 0 ? Math.round((totalCorrect / totalAttempts) * 100) : null;
     return {
@@ -261,6 +286,8 @@ export function CardCollectionModal({
       collected,
       mastered,
       percent,
+      unlockedStages: progress.unlockedStages,
+      totalStages: progress.totalStages,
       byRarity,
       byCategory,
       totalAttempts,

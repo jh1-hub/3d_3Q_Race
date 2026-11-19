@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  BookOpen,
   Check,
   Download,
   Flag,
@@ -19,6 +20,7 @@ import {
   MACHINES,
   resolveSubCourse,
   SpeedClass,
+  SUB_ITEMS,
 } from '../game/types';
 import { formatRaceTime } from '../utils/formatTime';
 import {
@@ -40,7 +42,7 @@ interface SettingsModalProps {
   onToggleSfx: () => void;
 }
 
-type SettingsTab = 'audio' | 'rankings';
+type SettingsTab = 'audio' | 'rankings' | 'guide';
 
 export function SettingsModal({
   open,
@@ -133,30 +135,42 @@ export function SettingsModal({
         </div>
 
         {/* Tab Bar */}
-        <div className="grid grid-cols-2 gap-1.5 border-b border-white/10 bg-slate-950/60 px-4 py-2.5 sm:px-6">
+        <div className="grid grid-cols-3 gap-1.5 border-b border-white/10 bg-slate-950/60 px-4 py-2.5 sm:px-6">
           <button
             type="button"
             onClick={() => setTab('audio')}
-            className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs sm:text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
+            className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs sm:text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
               tab === 'audio'
                 ? 'bg-cyan-500 text-slate-950'
                 : 'bg-slate-900 text-slate-300 hover:text-white'
             }`}
           >
             <Music className="h-4 w-4 shrink-0" />
-            <span>サウンド・アプリ</span>
+            <span>サウンド</span>
           </button>
           <button
             type="button"
             onClick={() => setTab('rankings')}
-            className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs sm:text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
+            className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs sm:text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
               tab === 'rankings'
                 ? 'bg-amber-500 text-slate-950'
                 : 'bg-slate-900 text-slate-300 hover:text-white'
             }`}
           >
             <Trophy className="h-4 w-4 shrink-0" />
-            <span>コース別ランキング</span>
+            <span>ランキング</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('guide')}
+            className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs sm:text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
+              tab === 'guide'
+                ? 'bg-emerald-400 text-slate-950'
+                : 'bg-slate-900 text-slate-300 hover:text-white'
+            }`}
+          >
+            <BookOpen className="h-4 w-4 shrink-0" />
+            <span>操作・ガイド</span>
           </button>
         </div>
 
@@ -251,7 +265,7 @@ export function SettingsModal({
                 </button>
               </div>
             </div>
-          ) : (
+          ) : tab === 'rankings' ? (
             <div className="space-y-4">
               {/* Course + Mode + Difficulty Filter */}
               <div className="flex flex-col gap-2.5">
@@ -282,26 +296,26 @@ export function SettingsModal({
                     <button
                       type="button"
                       onClick={() => setRankingMode('race')}
-                      className={`flex min-h-[36px] items-center gap-1.5 rounded-md px-3 py-1 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                      className={`flex min-h-[36px] items-center gap-1.5 rounded-md px-3 py-1 font-display text-xs font-bold tracking-wider transition-colors cursor-pointer whitespace-nowrap ${
                         rankingMode === 'race'
                           ? 'bg-cyan-500 text-slate-950'
                           : 'text-slate-300 hover:text-white'
                       }`}
                     >
                       <Flag className="h-3 w-3" />
-                      <span>レース</span>
+                      <span>RACE</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => setRankingMode('time_attack')}
-                      className={`flex min-h-[36px] items-center gap-1.5 rounded-md px-3 py-1 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                      className={`flex min-h-[36px] items-center gap-1.5 rounded-md px-3 py-1 font-display text-xs font-bold tracking-wider transition-colors cursor-pointer whitespace-nowrap ${
                         rankingMode === 'time_attack'
                           ? 'bg-amber-400 text-slate-950'
                           : 'text-slate-300 hover:text-white'
                       }`}
                     >
                       <Timer className="h-3 w-3" />
-                      <span>タイムアタック</span>
+                      <span>TIME ATTACK</span>
                     </button>
                   </div>
 
@@ -411,6 +425,87 @@ export function SettingsModal({
                   })}
                 </div>
               )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Controls & Steering Gauge */}
+              <div className="rounded-xl border border-cyan-400/25 bg-slate-900/65 p-3.5">
+                <h3 className="text-xs font-bold tracking-wider text-cyan-300">
+                  基本操作 ＆ クイズゲート加速
+                </h3>
+                <ul className="mt-2 space-y-1.5 text-xs leading-relaxed text-slate-300">
+                  <li>
+                    <span className="font-semibold text-white">ステアリング：</span>
+                    マウスの左クリック長押し／画面タッチ長押しで左右ドラッグ、または{' '}
+                    <span className="font-mono-num text-cyan-200">← → / A・D</span> キーで操作（自動アクセル）。
+                  </li>
+                  <li>
+                    <span className="font-semibold text-white">選択肢タップ移動：</span>
+                    クイズカードの L1〜L4 をタップ／クリックすると該当レーンへ自動移動します。
+                  </li>
+                  <li>
+                    <span className="font-semibold text-white">下部ゲージの活用：</span>
+                    左クリック長押しまたはタッチ長押しで操作を続けると下部ゲージが素早く溜まります。満タン状態でクイズゲートを正解通過すると、自動移動時より強力なブーストが発動しゲージは 0 に戻ります（選択肢タップによる自動移動中は上昇が一時停止・維持されます）。
+                  </li>
+                  <li>
+                    <span className="font-semibold text-white">アイテム発動：</span>
+                    左上のアイテムスロットをタップ、画面クリック／上下フリック、または{' '}
+                    <span className="font-mono-num text-cyan-200">Space / E / ↑ / ↓</span>。
+                  </li>
+                </ul>
+              </div>
+
+              {/* Track Gimmicks & Modes */}
+              <div className="rounded-xl border border-amber-400/25 bg-slate-900/65 p-3.5">
+                <h3 className="text-xs font-bold tracking-wider text-amber-300">
+                  コースギミック ＆ モード
+                </h3>
+                <ul className="mt-2 space-y-1.5 text-xs leading-relaxed text-slate-300">
+                  <li>
+                    <span className="font-semibold text-white">加速床 ＆ エアロフロート床：</span>
+                    中央だけでなく左右の外側ラインにも配置。乗ると高速ダッシュや地雷回避の宙浮き滑空が発生します。
+                  </li>
+                  <li>
+                    <span className="font-semibold text-white">TIME ATTACK：</span>
+                    敵マシン・アイテムなしのタイムアタック専用モード。<span className="text-amber-300">BEST GHOST</span> や{' '}
+                    <span className="text-sky-300">LAST GHOST</span> との並走・リアルタイム差分（VS BEST）を確認できます。
+                  </li>
+                  <li>
+                    <span className="font-semibold text-white">HARD ＆ サブカテゴリ：</span>
+                    HARDクラスでは過去に間違えた用語・未解答の用語を優先出題（全カテゴリ出題で弱点集中対策が可能）。サブカテゴリ選択時は2周練習となりランキングには記録されません。
+                  </li>
+                </ul>
+              </div>
+
+              {/* Sub-Items Reference */}
+              <div className="rounded-xl border border-white/12 bg-slate-900/65 p-3.5">
+                <h3 className="text-xs font-bold tracking-wider text-emerald-300">
+                  全9種 サブアイテム効果（レースモード）
+                </h3>
+                <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {Object.values(SUB_ITEMS).map((item) => (
+                    <div
+                      key={item.type}
+                      className="rounded-lg border border-white/10 bg-slate-950/75 px-3 py-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-display text-xs font-bold text-white">
+                          {item.name}
+                        </span>
+                        <span
+                          className="rounded px-1.5 py-0.5 font-mono-num text-[10px] font-bold text-slate-950"
+                          style={{ backgroundColor: item.accentHex }}
+                        >
+                          {item.shortLabel}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[11px] leading-snug text-slate-400">
+                        {item.description}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
         </div>

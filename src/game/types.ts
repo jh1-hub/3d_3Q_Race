@@ -322,6 +322,7 @@ export interface SubItemMeta {
   name: string;
   shortLabel: string;
   accentHex: string;
+  description: string;
 }
 
 export const SUB_ITEMS: Record<SubItemType, SubItemMeta> = {
@@ -330,54 +331,63 @@ export const SUB_ITEMS: Record<SubItemType, SubItemMeta> = {
     name: 'Turbo Boost',
     shortLabel: 'TURBO',
     accentHex: '#F59E0B',
+    description: '超高速ターボで一気に加速。',
   },
   laser: {
     type: 'laser',
     name: 'Plasma Laser',
     shortLabel: 'LASER',
     accentHex: '#EF4444',
+    description: '前方へ直進する高速レーザーでライバルを撃墜。',
   },
   spread_missile: {
     type: 'spread_missile',
     name: 'Spread Missile',
     shortLabel: 'SPREAD',
     accentHex: '#FB7185',
+    description: '前方へ3発の拡散ミサイルを一斉発射。',
   },
   leader_bomb: {
     type: 'leader_bomb',
     name: 'SatelliteLaser',
     shortLabel: 'SAT-LASER',
     accentHex: '#F97316',
+    description: '先頭（自分が1位なら後続）へ上空から衛星レーザーを爆撃。',
   },
   mine: {
     type: 'mine',
     name: 'Mega Mine',
     shortLabel: 'MINE',
     accentHex: '#A855F7',
+    description: '後方に高威力マインを設置し、踏んだ敵をスピンさせる。',
   },
   glow_boost: {
     type: 'glow_boost',
     name: 'Hyper Glow',
     shortLabel: 'GLOW',
     accentHex: '#FDE047',
+    description: '光のオーラを纏って加速し、体当たりした相手を弾き飛ばす。',
   },
   hover_glide: {
     type: 'hover_glide',
     name: 'Aero Float',
     shortLabel: 'FLOAT',
     accentHex: '#2DD4BF',
+    description: '機体を浮上させて高速滑空し、地雷や地上障害物を回避。',
   },
   shield: {
     type: 'shield',
     name: 'Aegis Shield',
     shortLabel: 'SHIELD',
     accentHex: '#06B6D4',
+    description: '攻撃を防ぐ防御バリアを展開し、最高速もわずかに上昇。',
   },
   emp: {
     type: 'emp',
     name: 'EMP Wave',
     shortLabel: 'EMP',
     accentHex: '#38BDF8',
+    description: '周囲一帯に電磁波を放ち、近くのライバルをまとめてスピン。',
   },
 };
 
@@ -538,6 +548,8 @@ export interface RaceTelemetry {
   bestLapMs: number | null;
   totalRaceMs: number;
   allTimeBestLapMs: number | null;
+  allTimeBestTotalMs: number | null;
+  bestGhostDeltaMs: number | null;
   isNewRecord: boolean;
   rankingPlacement: number | null;
   markers: MinimapMarker[];

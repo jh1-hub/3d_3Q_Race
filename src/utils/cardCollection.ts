@@ -111,6 +111,43 @@ export function getUnlockedLoreCount(count: number, maxItems = 3): number {
   return Math.min(maxItems, count);
 }
 
+export interface CollectionProgressSummary {
+  collectedTerms: number;
+  totalTerms: number;
+  unlockedStages: number;
+  totalStages: number;
+  progressPercent: number;
+}
+
+export function getCollectionProgress(collection: CardCollectionMap): CollectionProgressSummary {
+  const allTerms = getAllFlatTerms();
+  const totalTerms = allTerms.length;
+  let collectedTerms = 0;
+  let unlockedStages = 0;
+  let totalStages = 0;
+
+  for (const item of allTerms) {
+    const maxStages = Math.max(1, item.term.descriptions.length || 3);
+    totalStages += maxStages;
+    const entry = collection[item.term.id];
+    if (entry && entry.count > 0) {
+      collectedTerms += 1;
+      unlockedStages += getUnlockedLoreCount(entry.count, maxStages);
+    }
+  }
+
+  const rawPercent = totalStages > 0 ? (unlockedStages / totalStages) * 100 : 0;
+  const progressPercent = Math.min(100, Math.round(rawPercent * 10) / 10);
+
+  return {
+    collectedTerms,
+    totalTerms,
+    unlockedStages,
+    totalStages,
+    progressPercent,
+  };
+}
+
 export interface GeneratedLaneChoice {
   term: TermData;
   itemKind: SubItemType;
@@ -163,9 +200,29 @@ export function generateQuizChallenge(
   let target: FlatTerm;
 
   if (difficulty === 'hard') {
-    // Hard mode: prioritize unanswered terms first; otherwise lowest accuracy terms (weakness drill)
+    // Hard mode: drill missed/low-accuracy terms across the course pool (stronger priority on full-category),
+    // mixed with unanswered terms so both weak spots and fresh terms are covered.
+    const weakPool = shuffleArray(
+      pool.filter((ft) => {
+        const s = termStats[ft.term.id];
+        return s && s.attempts > 0 && s.correct / s.attempts < 0.8;
+      })
+    ).sort((a, b) => {
+      const sa = termStats[a.term.id]!;
+      const sb = termStats[b.term.id]!;
+      const rateA = sa.correct / sa.attempts;
+      const rateB = sb.correct / sb.attempts;
+      if (Math.abs(rateA - rateB) > 0.001) return rateA - rateB;
+      return sb.attempts - sa.attempts;
+    });
     const unanswered = pool.filter((ft) => (termStats[ft.term.id]?.attempts ?? 0) === 0);
-    if (unanswered.length > 0) {
+    const isFullCourse = !categoryId && !subcategoryId;
+    const weakPickProb = isFullCourse ? 0.82 : 0.7;
+
+    if (weakPool.length > 0 && (unanswered.length === 0 || Math.random() < weakPickProb)) {
+      const weakSlice = weakPool.slice(0, Math.min(6, weakPool.length));
+      target = weakSlice[Math.floor(Math.random() * weakSlice.length)];
+    } else if (unanswered.length > 0) {
       target = unanswered[Math.floor(Math.random() * unanswered.length)];
     } else {
       const scored = shuffleArray(pool).sort((a, b) => {

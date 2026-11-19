@@ -29,7 +29,7 @@ import {
   SpeedClass,
 } from '../game/types';
 import { CardCollectionMap } from '../types';
-import { getAllFlatTerms, RARITY_META } from '../utils/cardCollection';
+import { getCollectionProgress, RARITY_META } from '../utils/cardCollection';
 import { formatRaceTime } from '../utils/formatTime';
 import { getTermEmoji } from '../utils/termIcon';
 
@@ -53,6 +53,7 @@ interface MenuOverlayProps {
   onStartRace: () => void;
   onReturnMenu: () => void;
   onOpenCollection: () => void;
+  onOpenCollectionTerm: (termId: number) => void;
   onOpenSettings: () => void;
   onToggleSound: () => void;
 }
@@ -77,13 +78,15 @@ export function MenuOverlay({
   onStartRace,
   onReturnMenu,
   onOpenCollection,
+  onOpenCollectionTerm,
   onOpenSettings,
   onToggleSound,
 }: MenuOverlayProps) {
   const [mobileTab, setMobileTab] = useState<'course' | 'machine'>('course');
 
-  const totalTermCount = getAllFlatTerms().length;
-  const collectedCount = Object.keys(collection).length;
+  const collectionProgress = getCollectionProgress(collection);
+  const totalTermCount = collectionProgress.totalTerms;
+  const collectedCount = collectionProgress.collectedTerms;
   const activeSubCourse = resolveSubCourse(selectedCourseKey);
   const selectedCourse = activeSubCourse.baseCourseId;
   const activeCourse = COURSES.find((c) => c.id === selectedCourse) ?? COURSES[0];
@@ -111,11 +114,15 @@ export function MenuOverlay({
                     ? 'TIME ATTACK FINISH'
                     : telemetry.rank === 1
                       ? '1ST PLACE · VICTORY'
-                      : `${telemetry.rank}位 フィニッシュ`}
+                      : telemetry.rank === 2
+                        ? '2ND PLACE'
+                        : telemetry.rank === 3
+                          ? '3RD PLACE'
+                          : `${telemetry.rank}TH PLACE`}
                 </h2>
                 {telemetry.rankingPlacement !== null && (
-                  <span className="font-mono-num text-xs font-bold text-amber-300">
-                    自己ベスト {telemetry.rankingPlacement}位 ランクイン
+                  <span className="font-display font-mono-num text-xs font-bold tracking-wider text-amber-300">
+                    NEW TOP 5 (#{telemetry.rankingPlacement})
                   </span>
                 )}
                 {isSubcategory && (
@@ -155,11 +162,11 @@ export function MenuOverlay({
               </div>
             </div>
             <div className="rounded-xl border border-white/10 bg-slate-900/70 p-2.5 sm:p-3">
-              <div className="flex items-center justify-between text-[10px] sm:text-[11px] text-slate-400">
-                <span>クイズ正答</span>
+              <div className="flex items-center justify-between font-display text-[10px] sm:text-[11px] tracking-wider text-slate-400">
+                <span>QUIZ SCORE</span>
                 {telemetry.bestQuizStreak >= 2 && (
                   <span className="font-mono-num font-bold text-amber-300">
-                    {telemetry.bestQuizStreak}連続
+                    {telemetry.bestQuizStreak} STREAK
                   </span>
                 )}
               </div>
@@ -213,7 +220,9 @@ export function MenuOverlay({
             {/* Final Standings (Race Mode only) */}
             {!isFinishedTA && telemetry.standings.length > 1 && (
               <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
-                <div className="mb-2 text-[11px] font-medium text-slate-400">最終順位</div>
+                <div className="mb-2 font-display text-[11px] font-medium tracking-wider text-slate-400">
+                  STANDINGS
+                </div>
                 <div className="divide-y divide-white/5">
                   {telemetry.standings.map((row) => (
                     <div
@@ -310,27 +319,56 @@ export function MenuOverlay({
             <div className="mt-3.5 rounded-xl border border-red-400/25 bg-[#12070b]/80 p-3">
               <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-red-200">
                 <span>間違い復習リスト ({telemetry.missedQuestions.length}問)</span>
-                <span className="text-slate-400">次回のHARD対策に活用</span>
+                <span className="text-slate-400">
+                  {telemetry.missedQuestions.some((m) => Boolean(collection[m.termId]))
+                    ? '取得済み用語はタップで図鑑へ · HARDで優先出題'
+                    : 'HARDで優先出題'}
+                </span>
               </div>
               <div className="max-h-40 space-y-2 overflow-y-auto pr-1">
-                {telemetry.missedQuestions.map((miss, idx) => (
-                  <div
-                    key={`${miss.termId}-${idx}`}
-                    className="rounded-lg border border-white/10 bg-slate-950/75 p-2.5 text-xs"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5">
-                      <span className="font-display font-bold text-amber-300">
-                        正解: {miss.termName}
-                      </span>
-                      <span className="text-[11px] text-red-300">
-                        選択: {miss.chosenTermName}
-                      </span>
+                {telemetry.missedQuestions.map((miss, idx) => {
+                  const isOwned = Boolean(collection[miss.termId]);
+                  const content = (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5">
+                        <span className="font-display font-bold text-amber-300">
+                          正解: {miss.termName}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] text-red-300">
+                            選択: {miss.chosenTermName}
+                          </span>
+                          {isOwned && (
+                            <span className="text-[10px] font-semibold text-cyan-300">
+                              図鑑 →
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+                        {miss.explanation}
+                      </p>
+                    </>
+                  );
+
+                  return isOwned ? (
+                    <button
+                      key={`${miss.termId}-${idx}`}
+                      type="button"
+                      onClick={() => onOpenCollectionTerm(miss.termId)}
+                      className="w-full rounded-lg border border-white/10 bg-slate-950/75 p-2.5 text-left text-xs transition-colors hover:border-amber-400/50 hover:bg-slate-900 cursor-pointer"
+                    >
+                      {content}
+                    </button>
+                  ) : (
+                    <div
+                      key={`${miss.termId}-${idx}`}
+                      className="w-full rounded-lg border border-white/10 bg-slate-950/75 p-2.5 text-left text-xs"
+                    >
+                      {content}
                     </div>
-                    <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
-                      {miss.explanation}
-                    </p>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ) : (
@@ -357,7 +395,9 @@ export function MenuOverlay({
               ) : (
                 <>
                   <RotateCcw className="h-4 w-4" />
-                  {isFinishedTA ? 'もう一度アタック' : '再レース'}
+                  <span className="font-display tracking-wider">
+                    {isFinishedTA ? 'RETRY' : 'RACE AGAIN'}
+                  </span>
                 </>
               )}
             </button>
@@ -394,12 +434,25 @@ export function MenuOverlay({
       <div className="flex flex-col gap-2">
         <div className="flex items-start justify-between gap-2.5">
           <div className="pointer-events-auto min-w-0">
-            <h1 className="font-display text-2xl sm:text-5xl font-bold tracking-tight text-white leading-none">
-              HYPERION <span className="text-cyan-400">GP</span>
-            </h1>
+            <div className="flex items-baseline gap-2.5 sm:gap-3.5">
+              <h1 className="font-display text-2xl sm:text-5xl font-bold tracking-tight text-white leading-none shrink-0">
+                HYPERION <span className="text-cyan-400">GP</span>
+              </h1>
+              <div
+                className="flex items-baseline gap-1.5 font-mono-num leading-none shrink-0"
+                title={`学習進捗（3パターン解放状況）: ${collectionProgress.unlockedStages} / ${collectionProgress.totalStages}`}
+              >
+                <span className="hidden sm:inline font-display text-[10px] font-semibold tracking-wider text-slate-400">
+                  PROGRESS
+                </span>
+                <span className="text-sm sm:text-xl font-bold text-emerald-400">
+                  {collectionProgress.progressPercent.toFixed(1)}%
+                </span>
+              </div>
+            </div>
             <p className="mt-1 text-[11px] sm:text-sm text-slate-300 truncate">
               {activeSubCourse.fullName} · {activeCourse.categoryLabel}
-              {activeSubCourse.subcategoryId ? ' · 2周' : ''}
+              {activeSubCourse.subcategoryId ? ' · 2 LAPS' : ''}
             </p>
           </div>
 
@@ -408,26 +461,26 @@ export function MenuOverlay({
             <button
               type="button"
               onClick={() => onSelectMode('race')}
-              className={`flex min-h-[40px] items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+              className={`flex min-h-[40px] items-center gap-1.5 rounded-lg px-4 py-2 font-display text-xs font-bold tracking-wider transition-colors cursor-pointer whitespace-nowrap ${
                 gameMode === 'race'
                   ? 'bg-cyan-500 text-slate-950'
                   : 'text-slate-300 hover:text-white'
               }`}
             >
               <Flag className="h-3.5 w-3.5 shrink-0" />
-              <span>レース</span>
+              <span>RACE</span>
             </button>
             <button
               type="button"
               onClick={() => onSelectMode('time_attack')}
-              className={`flex min-h-[40px] items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+              className={`flex min-h-[40px] items-center gap-1.5 rounded-lg px-4 py-2 font-display text-xs font-bold tracking-wider transition-colors cursor-pointer whitespace-nowrap ${
                 gameMode === 'time_attack'
                   ? 'bg-amber-400 text-slate-950'
                   : 'text-slate-300 hover:text-white'
               }`}
             >
               <Timer className="h-3.5 w-3.5 shrink-0" />
-              <span>タイムアタック</span>
+              <span>TIME ATTACK</span>
             </button>
           </div>
 
@@ -457,6 +510,16 @@ export function MenuOverlay({
                   {formatRaceTime(telemetry.allTimeBestLapMs)}
                 </div>
               </div>
+              {isTimeAttack && (
+                <div className="border-l border-white/10 pl-3">
+                  <div className="font-display text-[10px] tracking-wider text-slate-400">
+                    BEST TOTAL TIME
+                  </div>
+                  <div className="font-mono-num text-sm sm:text-base font-bold text-cyan-300">
+                    {formatRaceTime(telemetry.allTimeBestTotalMs)}
+                  </div>
+                </div>
+              )}
             </div>
 
             <button
@@ -494,26 +557,26 @@ export function MenuOverlay({
           <button
             type="button"
             onClick={() => onSelectMode('race')}
-            className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+            className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 font-display text-xs font-bold tracking-wider transition-colors cursor-pointer whitespace-nowrap ${
               gameMode === 'race'
                 ? 'bg-cyan-500 text-slate-950'
                 : 'text-slate-300 hover:text-white'
             }`}
           >
             <Flag className="h-3.5 w-3.5 shrink-0" />
-            <span>レース</span>
+            <span>RACE</span>
           </button>
           <button
             type="button"
             onClick={() => onSelectMode('time_attack')}
-            className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+            className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 font-display text-xs font-bold tracking-wider transition-colors cursor-pointer whitespace-nowrap ${
               gameMode === 'time_attack'
                 ? 'bg-amber-400 text-slate-950'
                 : 'text-slate-300 hover:text-white'
             }`}
           >
             <Timer className="h-3.5 w-3.5 shrink-0" />
-            <span>タイムアタック</span>
+            <span>TIME ATTACK</span>
           </button>
         </div>
       </div>
@@ -653,21 +716,21 @@ export function MenuOverlay({
                     </div>
                     <div className="mt-0.5 text-[11px] text-slate-300">{m.subtitle}</div>
                   </div>
-                  <div className="flex flex-col gap-1 w-28 shrink-0 text-[10px] text-slate-300">
+                  <div className="flex flex-col gap-1 w-30 shrink-0 font-display text-[10px] tracking-wider text-slate-300">
                     <div className="flex items-center justify-between gap-1.5">
-                      <span>速度</span>
+                      <span>SPEED</span>
                       <div className="h-1.5 w-16 overflow-hidden rounded-sm bg-slate-800">
                         <div className="h-full bg-cyan-400" style={{ width: `${m.stats.speed}%` }} />
                       </div>
                     </div>
                     <div className="flex items-center justify-between gap-1.5">
-                      <span>加速</span>
+                      <span>ACCEL</span>
                       <div className="h-1.5 w-16 overflow-hidden rounded-sm bg-slate-800">
                         <div className="h-full bg-amber-400" style={{ width: `${m.stats.accel}%` }} />
                       </div>
                     </div>
                     <div className="flex items-center justify-between gap-1.5">
-                      <span>道具</span>
+                      <span>ITEM</span>
                       <div className="h-1.5 w-16 overflow-hidden rounded-sm bg-slate-800">
                         <div className="h-full bg-purple-400" style={{ width: `${m.stats.itemPower}%` }} />
                       </div>
@@ -679,33 +742,41 @@ export function MenuOverlay({
           </div>
         )}
 
-        {/* Mobile Time Attack Ghost Toggles */}
+        {/* Mobile Time Attack Ghost Toggles & Best Total */}
         {isTimeAttack && (
-          <div className="mt-2.5 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={onToggleBestGhost}
-              className={`flex min-h-[38px] items-center justify-between gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors cursor-pointer ${
-                showBestGhost
-                  ? 'border-amber-400/55 bg-amber-500/15 text-amber-200'
-                  : 'border-white/10 bg-slate-900/60 text-slate-400'
-              }`}
-            >
-              <span className="truncate font-display tracking-wider">BEST GHOST</span>
-              {showBestGhost ? <Eye className="h-3.5 w-3.5 shrink-0" /> : <EyeOff className="h-3.5 w-3.5 shrink-0" />}
-            </button>
-            <button
-              type="button"
-              onClick={onToggleLastGhost}
-              className={`flex min-h-[38px] items-center justify-between gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors cursor-pointer ${
-                showLastGhost
-                  ? 'border-sky-400/55 bg-sky-500/15 text-sky-200'
-                  : 'border-white/10 bg-slate-900/60 text-slate-400'
-              }`}
-            >
-              <span className="truncate font-display tracking-wider">LAST GHOST</span>
-              {showLastGhost ? <Eye className="h-3.5 w-3.5 shrink-0" /> : <EyeOff className="h-3.5 w-3.5 shrink-0" />}
-            </button>
+          <div className="mt-2.5 space-y-2">
+            <div className="flex items-center justify-between rounded-lg border border-white/10 bg-slate-900/75 px-3 py-1.5 text-[11px]">
+              <span className="font-display tracking-wider text-slate-400">BEST TOTAL TIME</span>
+              <span className="font-mono-num font-bold text-cyan-300">
+                {formatRaceTime(telemetry.allTimeBestTotalMs)}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={onToggleBestGhost}
+                className={`flex min-h-[38px] items-center justify-between gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors cursor-pointer ${
+                  showBestGhost
+                    ? 'border-amber-400/55 bg-amber-500/15 text-amber-200'
+                    : 'border-white/10 bg-slate-900/60 text-slate-400'
+                }`}
+              >
+                <span className="truncate font-display tracking-wider">BEST GHOST</span>
+                {showBestGhost ? <Eye className="h-3.5 w-3.5 shrink-0" /> : <EyeOff className="h-3.5 w-3.5 shrink-0" />}
+              </button>
+              <button
+                type="button"
+                onClick={onToggleLastGhost}
+                className={`flex min-h-[38px] items-center justify-between gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors cursor-pointer ${
+                  showLastGhost
+                    ? 'border-sky-400/55 bg-sky-500/15 text-sky-200'
+                    : 'border-white/10 bg-slate-900/60 text-slate-400'
+                }`}
+              >
+                <span className="truncate font-display tracking-wider">LAST GHOST</span>
+                {showLastGhost ? <Eye className="h-3.5 w-3.5 shrink-0" /> : <EyeOff className="h-3.5 w-3.5 shrink-0" />}
+              </button>
+            </div>
           </div>
         )}
 
@@ -763,7 +834,7 @@ export function MenuOverlay({
             ) : (
               <>
                 <Play className="h-4.5 w-4.5 fill-current" />
-                {isTimeAttack ? 'タイムアタック開始' : 'レース開始'}
+                {isTimeAttack ? 'START TIME ATTACK' : 'START RACE'}
               </>
             )}
           </button>
@@ -903,21 +974,21 @@ export function MenuOverlay({
                     </div>
                   </div>
                   <span className="mt-0.5 text-[11px] text-slate-400">{m.subtitle}</span>
-                  <div className="mt-2 space-y-1 text-[10px] text-slate-300">
+                  <div className="mt-2 space-y-1 font-display text-[10px] tracking-wider text-slate-300">
                     <div className="flex items-center justify-between gap-2">
-                      <span>最高速度</span>
+                      <span>TOP SPEED</span>
                       <div className="h-1.5 w-18 overflow-hidden rounded-sm bg-slate-800">
                         <div className="h-full bg-cyan-400" style={{ width: `${m.stats.speed}%` }} />
                       </div>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span>加速性能</span>
+                      <span>ACCEL</span>
                       <div className="h-1.5 w-18 overflow-hidden rounded-sm bg-slate-800">
                         <div className="h-full bg-amber-400" style={{ width: `${m.stats.accel}%` }} />
                       </div>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span>アイテム性能</span>
+                      <span>ITEM POWER</span>
                       <div className="h-1.5 w-18 overflow-hidden rounded-sm bg-slate-800">
                         <div className="h-full bg-purple-400" style={{ width: `${m.stats.itemPower}%` }} />
                       </div>
@@ -1009,7 +1080,7 @@ export function MenuOverlay({
             ) : (
               <div className="text-[11px] text-slate-400 leading-relaxed">
                 {speedClass === 'hard'
-                  ? 'HARD: 未解答の問題・正答率が低い問題を優先出題して弱点を重点攻略します。'
+                  ? 'HARD: 過去に間違えた問題・未解答の問題を優先出題して弱点を重点攻略します。'
                   : 'NORMAL: 未収集・未解放の用語パーツをバランスよく出題します。'}
               </div>
             )}
@@ -1030,7 +1101,7 @@ export function MenuOverlay({
               ) : (
                 <>
                   <Play className="h-4 w-4 fill-current" />
-                  {isTimeAttack ? 'タイムアタック開始' : 'レース開始'}
+                  {isTimeAttack ? 'START TIME ATTACK' : 'START RACE'}
                 </>
               )}
             </button>
