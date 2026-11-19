@@ -30,7 +30,7 @@ import {
 } from '../game/types';
 import { CardCollectionMap } from '../types';
 import { getCollectionProgress, RARITY_META } from '../utils/cardCollection';
-import { formatRaceTime } from '../utils/formatTime';
+import { formatDeltaTime, formatRaceTime } from '../utils/formatTime';
 import { getTermEmoji } from '../utils/termIcon';
 
 interface MenuOverlayProps {
@@ -97,6 +97,23 @@ export function MenuOverlay({
     const isSubcategory = telemetry.subcategoryId !== null;
     const minLapMs =
       telemetry.lapTimesMs.length > 0 ? Math.min(...telemetry.lapTimesMs) : null;
+
+    const prevBestTotalMs = telemetry.previousBestTotalMs;
+    const totalDeltaMs =
+      prevBestTotalMs !== null ? Math.round(telemetry.totalRaceMs - prevBestTotalMs) : null;
+    const lapDeltaMs =
+      telemetry.previousBestLapMs !== null && telemetry.bestLapMs !== null
+        ? Math.round(telemetry.bestLapMs - telemetry.previousBestLapMs)
+        : null;
+
+    const top1Entry = telemetry.topRankings[0] ?? null;
+    const showTARankingsPanel = isFinishedTA && !isSubcategory && telemetry.topRankings.length > 0;
+    const showRaceStandingsPanel = !isFinishedTA && telemetry.standings.length > 1;
+    const ghostSummary = telemetry.bestGhostSummary;
+    const ghostSyncedWithRank1 =
+      Boolean(ghostSummary && top1Entry) &&
+      Math.abs((ghostSummary?.totalTimeMs ?? 0) - (top1Entry?.totalTimeMs ?? 0)) < 10;
+
     return (
       <div className="pointer-events-auto fixed inset-0 z-20 flex items-start sm:items-center justify-center bg-[#05070e]/78 p-3 sm:p-4 overflow-y-auto">
         <div className="w-full max-w-2xl rounded-2xl border border-white/15 bg-[#070b14]/96 p-4 sm:p-6 shadow-2xl my-auto">
@@ -118,15 +135,48 @@ export function MenuOverlay({
                           ? '3RD PLACE'
                           : `${telemetry.rank}TH PLACE`}
                 </h2>
-                {telemetry.rankingPlacement !== null && (
-                  <span className="font-display font-mono-num text-xs font-bold tracking-wider text-amber-300">
-                    NEW TOP 5 (#{telemetry.rankingPlacement})
-                  </span>
-                )}
-                {isSubcategory && (
-                  <span className="font-mono-num text-xs font-semibold text-slate-400">
-                    2LAP サブカテゴリ練習（ランキング記録なし）
-                  </span>
+
+                {isFinishedTA ? (
+                  isSubcategory ? (
+                    <span className="font-mono-num text-xs font-semibold text-slate-300">
+                      {prevBestTotalMs === null
+                        ? '初回ベスト記録！'
+                        : totalDeltaMs !== null && totalDeltaMs < 0
+                          ? `NEW BEST (${formatDeltaTime(totalDeltaMs)})`
+                          : totalDeltaMs !== null
+                            ? `${formatDeltaTime(totalDeltaMs)} vs BEST`
+                            : ''}
+                    </span>
+                  ) : prevBestTotalMs === null ? (
+                    <span className="font-display font-mono-num text-xs font-bold tracking-wider text-amber-300">
+                      FIRST RECORD (#1)
+                    </span>
+                  ) : telemetry.isNewBestTotal ? (
+                    <span className="font-display font-mono-num text-xs font-bold tracking-wider text-emerald-300">
+                      NEW #1 RECORD! ({formatDeltaTime(totalDeltaMs ?? 0)})
+                    </span>
+                  ) : telemetry.rankingPlacement !== null ? (
+                    <span className="font-display font-mono-num text-xs font-bold tracking-wider text-amber-300">
+                      #{telemetry.rankingPlacement} RANK IN ({formatDeltaTime(totalDeltaMs ?? 0)} vs #1)
+                    </span>
+                  ) : (
+                    <span className="font-mono-num text-xs font-bold text-rose-300">
+                      TOP 5圏外 ({formatDeltaTime(totalDeltaMs ?? 0)} vs #1)
+                    </span>
+                  )
+                ) : (
+                  <>
+                    {telemetry.rankingPlacement !== null && (
+                      <span className="font-display font-mono-num text-xs font-bold tracking-wider text-amber-300">
+                        NEW TOP 5 (#{telemetry.rankingPlacement})
+                      </span>
+                    )}
+                    {isSubcategory && (
+                      <span className="font-mono-num text-xs font-semibold text-slate-400">
+                        2LAP サブカテゴリ練習（ランキング記録なし）
+                      </span>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -140,15 +190,46 @@ export function MenuOverlay({
           </div>
 
           <div className="mt-4 grid grid-cols-3 gap-2.5 sm:gap-3">
-            <div className="rounded-xl border border-white/10 bg-slate-900/70 p-2.5 sm:p-3">
-              <div className="font-display text-[10px] sm:text-[11px] tracking-wider text-slate-400">
-                TOTAL TIME
+            <div
+              className={`rounded-xl border p-2.5 sm:p-3 ${
+                telemetry.isNewBestTotal
+                  ? 'border-emerald-400/45 bg-emerald-500/10'
+                  : 'border-white/10 bg-slate-900/70'
+              }`}
+            >
+              <div className="flex items-center justify-between font-display text-[10px] sm:text-[11px] tracking-wider text-slate-400">
+                <span>TOTAL TIME</span>
+                {telemetry.isNewBestTotal && (
+                  <span className="font-bold text-emerald-300">NEW</span>
+                )}
               </div>
               <div className="mt-1 font-mono-num text-sm sm:text-xl font-bold text-white">
                 {formatRaceTime(telemetry.totalRaceMs)}
               </div>
+              {isFinishedTA && (
+                <div className="mt-1 font-mono-num text-[10px] leading-tight">
+                  {prevBestTotalMs === null ? (
+                    <span className="text-amber-300">初回記録 (#1)</span>
+                  ) : totalDeltaMs !== null && totalDeltaMs < 0 ? (
+                    <span className="font-bold text-emerald-300">
+                      {formatDeltaTime(totalDeltaMs)} (旧#1 {formatRaceTime(prevBestTotalMs)})
+                    </span>
+                  ) : (
+                    <span className="text-rose-300">
+                      {formatDeltaTime(totalDeltaMs ?? 0)} (#1 {formatRaceTime(prevBestTotalMs)})
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
-            <div className="rounded-xl border border-white/10 bg-slate-900/70 p-2.5 sm:p-3">
+
+            <div
+              className={`rounded-xl border p-2.5 sm:p-3 ${
+                telemetry.isNewRecord
+                  ? 'border-cyan-400/45 bg-cyan-500/10'
+                  : 'border-white/10 bg-slate-900/70'
+              }`}
+            >
               <div className="flex items-center justify-between font-display text-[10px] sm:text-[11px] tracking-wider text-slate-400">
                 <span>BEST LAP</span>
                 {telemetry.isNewRecord && (
@@ -158,7 +239,23 @@ export function MenuOverlay({
               <div className="mt-1 font-mono-num text-sm sm:text-xl font-bold text-cyan-400">
                 {formatRaceTime(telemetry.bestLapMs)}
               </div>
+              {isFinishedTA && (
+                <div className="mt-1 font-mono-num text-[10px] leading-tight">
+                  {telemetry.previousBestLapMs === null ? (
+                    <span className="text-cyan-300">初回ラップ記録</span>
+                  ) : lapDeltaMs !== null && lapDeltaMs < 0 ? (
+                    <span className="font-bold text-emerald-300">
+                      {formatDeltaTime(lapDeltaMs)} (旧 {formatRaceTime(telemetry.previousBestLapMs)})
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">
+                      {formatDeltaTime(lapDeltaMs ?? 0)} (自己 {formatRaceTime(telemetry.previousBestLapMs)})
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
+
             <div className="rounded-xl border border-white/10 bg-slate-900/70 p-2.5 sm:p-3">
               <div className="flex items-center justify-between font-display text-[10px] sm:text-[11px] tracking-wider text-slate-400">
                 <span>QUIZ SCORE</span>
@@ -177,8 +274,13 @@ export function MenuOverlay({
           {/* All Individual Lap Times */}
           {telemetry.lapTimesMs.length > 0 && (
             <div className="mt-3 rounded-xl border border-white/10 bg-slate-900/50 p-2.5 sm:p-3">
-              <div className="mb-1.5 font-display text-[11px] font-medium tracking-wider text-slate-400">
-                LAP TIMES
+              <div className="mb-1.5 flex items-center justify-between text-[11px] font-medium text-slate-400">
+                <span className="font-display tracking-wider">LAP TIMES</span>
+                {isFinishedTA && !telemetry.isNewBestTotal && top1Entry && top1Entry.lapTimesMs.length > 0 && (
+                  <span className="font-mono-num text-[10px] text-amber-300">
+                    #1 {top1Entry.lapTimesMs.map((lt, i) => `L${i + 1} ${formatRaceTime(lt)}`).join(' · ')}
+                  </span>
+                )}
               </div>
               <div
                 className={`grid gap-2 ${
@@ -187,6 +289,11 @@ export function MenuOverlay({
               >
                 {telemetry.lapTimesMs.map((lt, idx) => {
                   const isBest = minLapMs !== null && lt === minLapMs;
+                  const rank1LapMs =
+                    isFinishedTA && !telemetry.isNewBestTotal && top1Entry?.lapTimesMs[idx]
+                      ? top1Entry.lapTimesMs[idx]
+                      : null;
+                  const lapVsRank1 = rank1LapMs !== null ? Math.round(lt - rank1LapMs) : null;
                   return (
                     <div
                       key={idx}
@@ -200,8 +307,19 @@ export function MenuOverlay({
                         <span className="text-slate-400">LAP {idx + 1}</span>
                         {isBest && <span className="font-bold text-cyan-300">BEST</span>}
                       </div>
-                      <div className="mt-0.5 font-mono-num text-xs sm:text-sm font-bold text-white">
-                        {formatRaceTime(lt)}
+                      <div className="mt-0.5 flex items-baseline justify-between gap-1 font-mono-num">
+                        <span className="text-xs sm:text-sm font-bold text-white">
+                          {formatRaceTime(lt)}
+                        </span>
+                        {lapVsRank1 !== null && (
+                          <span
+                            className={`text-[10px] font-semibold ${
+                              lapVsRank1 <= 0 ? 'text-emerald-300' : 'text-rose-300'
+                            }`}
+                          >
+                            {formatDeltaTime(lapVsRank1)}
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
@@ -212,11 +330,97 @@ export function MenuOverlay({
 
           <div
             className={`mt-4 grid grid-cols-1 gap-3.5 sm:gap-4 ${
-              !isFinishedTA && telemetry.standings.length > 1 ? 'md:grid-cols-2' : ''
+              showRaceStandingsPanel || showTARankingsPanel ? 'md:grid-cols-2' : ''
             }`}
           >
+            {/* Time Attack TOP 5 Comparison Panel */}
+            {showTARankingsPanel && (
+              <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
+                <div className="mb-2 flex items-center justify-between font-display text-[11px] font-medium tracking-wider text-slate-400">
+                  <span>TIME ATTACK TOP 5</span>
+                  <span className="text-[10px] text-amber-300">
+                    {telemetry.speedClass.toUpperCase()}
+                  </span>
+                </div>
+                <div className="divide-y divide-white/5">
+                  {telemetry.topRankings.map((entry, idx) => {
+                    const isThisRun = telemetry.rankingPlacement === idx + 1;
+                    const machineSpec = MACHINES.find((m) => m.id === entry.machineId);
+                    const gapFromRank1 =
+                      idx > 0 && top1Entry
+                        ? Math.round(entry.totalTimeMs - top1Entry.totalTimeMs)
+                        : null;
+                    return (
+                      <div
+                        key={entry.id}
+                        className={`flex items-center justify-between gap-2 py-1.5 px-1.5 rounded text-xs ${
+                          isThisRun ? 'bg-cyan-500/12 font-bold text-cyan-200' : 'text-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className={`font-mono-num w-5 shrink-0 font-bold ${
+                              idx === 0
+                                ? 'text-amber-300'
+                                : idx === 1
+                                  ? 'text-slate-200'
+                                  : idx === 2
+                                    ? 'text-orange-300'
+                                    : 'text-slate-400'
+                            }`}
+                          >
+                            #{idx + 1}
+                          </span>
+                          <span
+                            className="h-2.5 w-2.5 rounded-sm shrink-0"
+                            style={{ backgroundColor: machineSpec?.accentHex ?? '#06B6D4' }}
+                          />
+                          <span className="font-display tracking-wide truncate">
+                            {entry.machineName}
+                          </span>
+                          {isThisRun && (
+                            <span className="rounded bg-cyan-400 px-1 py-0.5 text-[9px] font-bold text-slate-950 shrink-0">
+                              THIS RUN
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-baseline gap-1.5 font-mono-num shrink-0">
+                          {gapFromRank1 !== null && (
+                            <span className="text-[10px] text-slate-400">
+                              {formatDeltaTime(gapFromRank1)}
+                            </span>
+                          )}
+                          <span className={idx === 0 ? 'font-bold text-amber-300' : 'font-semibold'}>
+                            {formatRaceTime(entry.totalTimeMs)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {telemetry.rankingPlacement === null && top1Entry && (
+                    <div className="mt-1 flex items-center justify-between gap-2 rounded bg-rose-500/10 px-1.5 py-1.5 text-xs text-rose-200">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-mono-num text-[10px] font-bold text-rose-300 shrink-0">
+                          圏外
+                        </span>
+                        <span className="font-display tracking-wide truncate">
+                          {telemetry.machineName}
+                        </span>
+                      </div>
+                      <div className="flex items-baseline gap-1.5 font-mono-num shrink-0">
+                        <span className="text-[10px] text-rose-300">
+                          {formatDeltaTime(Math.round(telemetry.totalRaceMs - top1Entry.totalTimeMs))}
+                        </span>
+                        <span className="font-bold">{formatRaceTime(telemetry.totalRaceMs)}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Final Standings (Race Mode only) */}
-            {!isFinishedTA && telemetry.standings.length > 1 && (
+            {showRaceStandingsPanel && (
               <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
                 <div className="mb-2 font-display text-[11px] font-medium tracking-wider text-slate-400">
                   STANDINGS
@@ -307,8 +511,32 @@ export function MenuOverlay({
           </div>
 
           {isFinishedTA && (
-            <div className="mt-3 rounded-xl border border-cyan-400/25 bg-cyan-500/8 px-3.5 py-2 text-[11px] text-cyan-200">
-              今回の走行軌跡を「LAST GHOST」として保存しました（自己最速タイム更新時は「BEST GHOST」も更新）。
+            <div
+              className={`mt-3 rounded-xl border px-3.5 py-2 text-[11px] ${
+                telemetry.isNewBestGhost
+                  ? 'border-amber-400/45 bg-amber-500/12 text-amber-200'
+                  : 'border-cyan-400/25 bg-cyan-500/8 text-cyan-200'
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+                <span className="font-semibold">
+                  {telemetry.isNewBestGhost
+                    ? 'NEW BEST GHOST 記録完了！（BEST GHOST ＆ LAST GHOST を更新）'
+                    : 'LAST GHOST を保存しました（BEST GHOST は最速走行を維持）'}
+                </span>
+                {ghostSummary && (
+                  <span className="font-mono-num text-[10px] text-slate-200">
+                    BEST GHOST: {formatRaceTime(ghostSummary.totalTimeMs)} · {ghostSummary.machineName}
+                    {!isSubcategory && top1Entry && (
+                      ghostSyncedWithRank1
+                        ? '（#1記録と完全一致）'
+                        : top1Entry.totalTimeMs < ghostSummary.totalTimeMs - 10
+                          ? `（#1 ${formatRaceTime(top1Entry.totalTimeMs)} はゴースト追加前の記録）`
+                          : ''
+                    )}
+                  </span>
+                )}
+              </div>
             </div>
           )}
 

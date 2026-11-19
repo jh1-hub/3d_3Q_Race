@@ -12,3 +12,10 @@ export function formatRaceTime(ms: number | null): string {
   const cc = String(centis).padStart(2, '0');
   return `${mm}:${ss}.${cc}`;
 }
+
+export function formatDeltaTime(deltaMs: number): string {
+  if (!Number.isFinite(deltaMs)) return '--';
+  const sign = deltaMs > 0 ? '+' : deltaMs < 0 ? '-' : '±';
+  const absSec = Math.abs(deltaMs) / 1000;
+  return `${sign}${absSec.toFixed(2)}s`;
+}

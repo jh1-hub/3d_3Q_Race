@@ -524,6 +524,29 @@ export interface MissedQuizReview {
   rarity: 'C' | 'R' | 'SR' | 'UR';
 }
 
+export interface RankingEntry {
+  id: string;
+  courseId: string;
+  speedClass: SpeedClass;
+  mode?: GameMode;
+  totalTimeMs: number;
+  lapTimesMs: number[];
+  bestLapMs: number | null;
+  machineId: MachineId;
+  machineName: string;
+  rankFinished: number;
+  createdAt: number;
+}
+
+export interface GhostSummary {
+  totalTimeMs: number;
+  machineId: MachineId;
+  machineName: string;
+  lapTimesMs: number[];
+  bestLapMs: number | null;
+  createdAt: number;
+}
+
 export interface RaceTelemetry {
   phase: GamePhase;
   gameMode: GameMode;
@@ -549,8 +572,14 @@ export interface RaceTelemetry {
   totalRaceMs: number;
   allTimeBestLapMs: number | null;
   allTimeBestTotalMs: number | null;
+  previousBestLapMs: number | null;
+  previousBestTotalMs: number | null;
   bestGhostDeltaMs: number | null;
   isNewRecord: boolean;
+  isNewBestTotal: boolean;
+  isNewBestGhost: boolean;
+  bestGhostSummary: GhostSummary | null;
+  topRankings: RankingEntry[];
   rankingPlacement: number | null;
   markers: MinimapMarker[];
   standings: RacerStanding[];

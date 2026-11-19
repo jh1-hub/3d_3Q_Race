@@ -23,6 +23,7 @@ import {
   SUB_ITEMS,
 } from '../game/types';
 import { formatRaceTime } from '../utils/formatTime';
+import { loadBestGhost } from '../utils/ghosts';
 import {
   checkAllBgmCached,
   downloadAllOfflineAssets,
@@ -80,6 +81,14 @@ export function SettingsModal({
 
   const rankings = useMemo(
     () => (open ? getCourseRankings(rankingCourseId, rankingClass, rankingMode) : []),
+    [open, rankingCourseId, rankingClass, rankingMode]
+  );
+
+  const bestGhost = useMemo(
+    () =>
+      open && rankingMode === 'time_attack'
+        ? loadBestGhost(rankingCourseId, rankingClass)
+        : null,
     [open, rankingCourseId, rankingClass, rankingMode]
   );
 
@@ -397,6 +406,14 @@ export function SettingsModal({
                               <span className="font-display text-sm font-bold text-white truncate">
                                 {entry.machineName}
                               </span>
+                              {idx === 0 &&
+                                rankingMode === 'time_attack' &&
+                                bestGhost &&
+                                Math.abs(bestGhost.totalTimeMs - entry.totalTimeMs) < 10 && (
+                                  <span className="rounded border border-amber-400/50 bg-amber-500/15 px-1.5 py-0.5 font-display text-[9px] font-bold tracking-wider text-amber-300">
+                                    BEST GHOST
+                                  </span>
+                                )}
                               {rankingMode === 'race' && (
                                 <span className="text-[11px] text-slate-400 font-mono-num">
                                   {entry.rankFinished}位完走

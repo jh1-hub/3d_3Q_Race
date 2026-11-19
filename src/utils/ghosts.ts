@@ -1,4 +1,4 @@
-import { MachineId, SpeedClass } from '../game/types';
+import { GhostSummary, MachineId, SpeedClass } from '../game/types';
 
 // [tMs, s, lateral, yaw, hoverLift, actionFlags]
 export type GhostFrameTuple = [number, number, number, number, number, number];
@@ -15,6 +15,8 @@ export interface GhostRecording {
   machineId: MachineId;
   machineName: string;
   totalTimeMs: number;
+  lapTimesMs?: number[];
+  bestLapMs?: number | null;
   createdAt: number;
   frames: GhostFrameTuple[];
 }
@@ -54,11 +56,52 @@ function readGhost(storageKey: string): GhostRecording | null {
   }
 }
 
-function writeGhost(storageKey: string, recording: GhostRecording): void {
+function pruneStaleGhosts(preserveKey: string, includeSubBest: boolean): boolean {
   try {
-    localStorage.setItem(storageKey, JSON.stringify(recording));
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || k === preserveKey) continue;
+      if (k.startsWith(LAST_GHOST_PREFIX)) {
+        keysToRemove.push(k);
+      } else if (includeSubBest && k.startsWith(BEST_GHOST_PREFIX) && k.includes('__')) {
+        keysToRemove.push(k);
+      }
+    }
+    if (keysToRemove.length === 0) return false;
+    for (const k of keysToRemove) {
+      localStorage.removeItem(k);
+    }
+    return true;
   } catch {
-    // Ignore quota/storage failures silently
+    return false;
+  }
+}
+
+function writeGhost(storageKey: string, recording: GhostRecording, isBest: boolean): boolean {
+  const serialized = JSON.stringify(recording);
+  try {
+    localStorage.setItem(storageKey, serialized);
+    return true;
+  } catch {
+    // Quota recovery: evict LAST ghosts first (and subcategory BEST ghosts only if saving a BEST ghost)
+    if (pruneStaleGhosts(storageKey, false)) {
+      try {
+        localStorage.setItem(storageKey, serialized);
+        return true;
+      } catch {
+        // Fall through
+      }
+    }
+    if (isBest && pruneStaleGhosts(storageKey, true)) {
+      try {
+        localStorage.setItem(storageKey, serialized);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
   }
 }
 
@@ -70,16 +113,55 @@ export function loadLastGhost(courseKey: string, speedClass: SpeedClass): GhostR
   return readGhost(`${LAST_GHOST_PREFIX}${getBucketSuffix(courseKey, speedClass)}`);
 }
 
-export function saveTimeAttackGhosts(recording: GhostRecording): { isNewBestGhost: boolean } {
-  const suffix = getBucketSuffix(recording.courseKey, recording.speedClass);
-  writeGhost(`${LAST_GHOST_PREFIX}${suffix}`, recording);
+export function toGhostSummary(rec: GhostRecording | null): GhostSummary | null {
+  if (!rec) return null;
+  return {
+    totalTimeMs: rec.totalTimeMs,
+    machineId: rec.machineId,
+    machineName: rec.machineName,
+    lapTimesMs: Array.isArray(rec.lapTimesMs) ? [...rec.lapTimesMs] : [],
+    bestLapMs: typeof rec.bestLapMs === 'number' ? rec.bestLapMs : null,
+    createdAt: rec.createdAt,
+  };
+}
 
-  const existingBest = readGhost(`${BEST_GHOST_PREFIX}${suffix}`);
-  if (!existingBest || recording.totalTimeMs < existingBest.totalTimeMs) {
-    writeGhost(`${BEST_GHOST_PREFIX}${suffix}`, recording);
-    return { isNewBestGhost: true };
+export function isSameGhostRecording(
+  a: GhostRecording | null,
+  b: GhostRecording | null
+): boolean {
+  if (!a || !b) return false;
+  return a.createdAt === b.createdAt && Math.abs(a.totalTimeMs - b.totalTimeMs) < 0.5;
+}
+
+export function saveTimeAttackGhosts(recording: GhostRecording): {
+  isNewBestGhost: boolean;
+  savedBest: boolean;
+  bestGhost: GhostRecording | null;
+} {
+  const suffix = getBucketSuffix(recording.courseKey, recording.speedClass);
+  const bestKey = `${BEST_GHOST_PREFIX}${suffix}`;
+  const lastKey = `${LAST_GHOST_PREFIX}${suffix}`;
+
+  const existingBest = readGhost(bestKey);
+  const isFaster = !existingBest || recording.totalTimeMs < existingBest.totalTimeMs;
+
+  if (isFaster) {
+    // Write BEST ghost first so it gets storage priority over LAST ghost
+    const savedBest = writeGhost(bestKey, recording, true);
+    writeGhost(lastKey, recording, false);
+    return {
+      isNewBestGhost: savedBest,
+      savedBest,
+      bestGhost: savedBest ? recording : existingBest,
+    };
   }
-  return { isNewBestGhost: false };
+
+  writeGhost(lastKey, recording, false);
+  return {
+    isNewBestGhost: false,
+    savedBest: true,
+    bestGhost: existingBest,
+  };
 }
 
 export function packGhostFrame(

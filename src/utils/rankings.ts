@@ -1,18 +1,6 @@
-import { GameMode, MachineId, SpeedClass } from '../game/types';
+import { GameMode, RankingEntry, SpeedClass } from '../game/types';
 
-export interface RankingEntry {
-  id: string;
-  courseId: string;
-  speedClass: SpeedClass;
-  mode?: GameMode;
-  totalTimeMs: number;
-  lapTimesMs: number[];
-  bestLapMs: number | null;
-  machineId: MachineId;
-  machineName: string;
-  rankFinished: number;
-  createdAt: number;
-}
+export type { RankingEntry };
 
 type RankingsMap = Record<string, RankingEntry[]>;
 
