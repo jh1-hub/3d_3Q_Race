@@ -314,6 +314,7 @@ export class RaceEngine {
   private quizFeedbackTimer = 0;
   private assistedLaneIndex: number | null = null;
   private manualGauge = 0;
+  private currentSegmentS = 0.486;
 
   private onTelemetry: (telemetry: RaceTelemetry) => void;
   private onContextLostCb: (lost: boolean) => void;
@@ -433,6 +434,7 @@ export class RaceEngine {
     window.addEventListener('resize', this.handleResize);
     window.addEventListener('keydown', this.handleKeyDown);
     window.addEventListener('keyup', this.handleKeyUp);
+    window.addEventListener('blur', this.handleWindowBlur);
 
     this.emitTelemetry();
     this.clock.start();
@@ -636,6 +638,7 @@ export class RaceEngine {
 
   public startRace(): void {
     this.audio.init();
+    this.keys = {};
     this.itemSystem.resetDynamicHazards();
     this.itemSystem.setShowItems(this.gameMode !== 'time_attack');
     this.phase = 'countdown';
@@ -673,6 +676,7 @@ export class RaceEngine {
     this.quizFeedbackTimer = 0;
     this.assistedLaneIndex = null;
     this.manualGauge = 0;
+    this.updateCurrentSegmentS(this.playerRacer.s);
     this.prevBestGhostFlags = 0;
     this.prevLastGhostFlags = 0;
     this.recordSampleAccum = 0;
@@ -696,6 +700,7 @@ export class RaceEngine {
   public togglePause(): void {
     if (this.phase === 'racing') {
       this.phase = 'paused';
+      this.keys = {};
       this.audio.updateEngine(0, false, false);
       this.emitTelemetry();
     } else if (this.phase === 'paused') {
@@ -706,6 +711,7 @@ export class RaceEngine {
 
   public returnToMenu(): void {
     this.phase = 'menu';
+    this.keys = {};
     this.finishCelebrationTimer = 0;
     this.audio.updateEngine(0, false, false);
     this.itemSystem.resetDynamicHazards();
@@ -1098,6 +1104,10 @@ export class RaceEngine {
     this.keys[e.code] = false;
   };
 
+  private handleWindowBlur = (): void => {
+    this.keys = {};
+  };
+
   private handleResize = (): void => {
     if (this.disposed) return;
     const w = this.container.clientWidth || window.innerWidth;
@@ -1212,16 +1222,17 @@ export class RaceEngine {
     }
 
     // Active Racing, Post-Finish Celebration, or Finished (auto-pilot cooldown)
-    if (this.phase === 'racing') {
+    let finishedThisStep = false;
+    if (this.phase === 'racing' || this.phase === 'finishing') {
       this.raceElapsedMs += dt * 1000;
-      this.updateQuizSchedule();
-    } else if (this.phase === 'finishing') {
-      this.finishCelebrationTimer -= dt;
-      if (this.finishCelebrationTimer <= 0) {
-        this.finishCelebrationTimer = 0;
-        this.phase = 'finished';
-        this.audio.updateEngine(0, false, false);
-        this.emitTelemetry();
+      if (this.phase === 'racing') {
+        this.updateQuizSchedule();
+      } else {
+        this.finishCelebrationTimer -= dt;
+        if (this.finishCelebrationTimer <= 0) {
+          this.finishCelebrationTimer = 0;
+          finishedThisStep = true;
+        }
       }
     }
 
@@ -1275,12 +1286,18 @@ export class RaceEngine {
 
       this.checkSpeedPads(r);
       this.checkTrackPickups(r);
-      this.updateLapProgress(r);
+      this.updateLapProgress(r, dt);
       this.syncRacerVisual(
         r,
         dt,
         r.isPlayer ? playerAccelerating || this.phase === 'finishing' : r.accelSurgeTimer > 0 || r.glowBoostTimer > 0
       );
+    }
+
+    if (finishedThisStep) {
+      this.phase = 'finished';
+      this.audio.updateEngine(0, false, false);
+      this.emitTelemetry();
     }
 
     if (this.gameMode === 'time_attack' && this.phase === 'racing' && !this.playerRacer.finished) {
@@ -1489,23 +1506,16 @@ export class RaceEngine {
       baseMaxSpeed * hitPenalty * shieldBonus * Math.max(turboSpeedMult, glowBonus) * hoverBonus;
     const accelRate = 48 * spec.accel * classMultiplier * turboAccelMult * penaltyAccelMult;
 
-    // Pure auto-throttle racing (no brake)
-    r.speed += accelRate * dt;
-    r.speed = THREE.MathUtils.clamp(r.speed, 0, activeMaxSpeed);
-    if (r.speed > activeMaxSpeed) {
+    // Pure auto-throttle racing (smooth coast-down when turbo/boost ends rather than abrupt clamping)
+    if (r.speed < activeMaxSpeed) {
+      r.speed = Math.min(activeMaxSpeed, r.speed + accelRate * dt);
+    } else if (r.speed > activeMaxSpeed) {
       r.speed = THREE.MathUtils.damp(r.speed, activeMaxSpeed, 3.2, dt);
     }
 
     // Manual steering clears lane-assist override immediately
     if (Math.abs(steer) >= 0.08) {
       this.assistedLaneIndex = null;
-    }
-
-    // Unnamed Manual Steering Gauge: rises fully only while holding mouse left-click or touch;
-    // idle or keyboard steering charges at 1/20 of the normal pace; pauses during auto lane-assist.
-    if (this.assistedLaneIndex === null) {
-      const chargeRate = this.touchInput.pointerHeld ? 0.115 : 0.115 / 20;
-      this.manualGauge = Math.min(1, this.manualGauge + chargeRate * dt);
     }
 
     // Steering physics relative to track tangent (smooth lateral control so Lanes 2 & 3 hold steady)
@@ -1518,11 +1528,20 @@ export class RaceEngine {
     // Move along track tangent + lateral offset
     this.track.sampleAtS(r.s, _sample);
     const forwardSpeed = Math.cos(r.yawAngle) * r.speed;
+    const dsMoved = Math.max(0, (forwardSpeed * dt) / this.track.totalLength);
     const targetLatVel = -Math.sin(r.yawAngle) * r.speed * 0.92;
     r.lateralVel = THREE.MathUtils.damp(r.lateralVel, targetLatVel, 11.5, dt);
 
+    // Unnamed Manual Steering Gauge: scaled by distance to next quiz gate so full manual across
+    // the entire segment reaches 100% right before the gate (while late lane-tap or idle/keyboard falls short).
+    if (this.assistedLaneIndex === null) {
+      const fullChargeS = Math.max(0.25, this.currentSegmentS * 0.98);
+      const paceMult = this.touchInput.pointerHeld ? 1.0 : 0.05;
+      this.manualGauge = Math.min(1, this.manualGauge + (dsMoved / fullChargeS) * paceMult);
+    }
+
     r.prevS = r.s;
-    r.s = (((r.s + (forwardSpeed * dt) / this.track.totalLength) % 1) + 1) % 1;
+    r.s = (((r.s + dsMoved) % 1) + 1) % 1;
     r.lateral += r.lateralVel * dt;
 
     // Magnetic lane-centering assist near quiz gates so targeted lanes (including L2 & L3) lock steadily
@@ -1757,6 +1776,17 @@ export class RaceEngine {
     return bestIdx;
   }
 
+  private updateCurrentSegmentS(fromS: number): void {
+    const nextRow = this.itemSystem.rows[this.nextQuizRowIndex];
+    if (!nextRow) {
+      this.currentSegmentS = 0.47;
+      return;
+    }
+    let ds = nextRow.s - fromS;
+    if (ds <= 0.05) ds += 1;
+    this.currentSegmentS = Math.max(0.25, ds);
+  }
+
   private updateQuizSchedule(): void {
     const totalRaceGates = this.getTotalLaps() * this.itemSystem.rows.length;
     if (this.playerRacer.finished || this.quizGatesCleared >= totalRaceGates) {
@@ -1899,45 +1929,41 @@ export class RaceEngine {
       });
       this.onCollectionChange?.();
 
-      // Correct answer: clear any lingering quiz drag, grant stronger Turbo boost + streak bonus (and Manual MAX boost if full)
+      // Correct answer: clear any lingering quiz drag, consume manual gauge for proportional turbo boost
       r.quizPenaltyTimer = 0;
       const isTimeAttack = this.gameMode === 'time_attack';
-      const manualMaxed = this.manualGauge >= 0.999;
-      if (manualMaxed) {
-        this.manualGauge = 0;
-      }
+      const gaugeFactor = THREE.MathUtils.clamp(this.manualGauge, 0, 1);
+      const manualMaxed = gaugeFactor >= 0.999;
+      this.manualGauge = 0;
       const classMultiplier = this.speedClass === 'hard' ? 1.10 : 1.0;
       const baseMax = (this.getSelectedSpec().maxSpeedKmh / 3.6) * classMultiplier;
       const streakExtraSec = Math.min(1.4, Math.max(0, (this.quizStreak - 1) * 0.35));
       const boostLaneActive = !isTimeAttack && choice.itemKind === 'boost';
 
-      r.accelSurgeTimer = Math.max(
-        r.accelSurgeTimer,
-        (manualMaxed ? 4.1 : 3.2) * r.itemPower + streakExtraSec
+      const gaugeSurgeDur = (3.2 + 1.2 * gaugeFactor) * r.itemPower + streakExtraSec;
+      const normalLaneSpeedMult = Math.max(
+        this.quizStreak >= 3 ? 1.32 : 1.24,
+        1.24 + 0.14 * gaugeFactor
       );
+      const boostLaneSpeedMult = 1.42 + 0.06 * gaugeFactor;
+
+      r.accelSurgeTimer = Math.max(r.accelSurgeTimer, gaugeSurgeDur);
       r.speed = Math.max(
         r.speed,
-        baseMax *
-          (boostLaneActive
-            ? manualMaxed
-              ? 1.48
-              : 1.42
-            : manualMaxed
-              ? 1.38
-              : this.quizStreak >= 3
-                ? 1.32
-                : 1.24)
+        baseMax * (boostLaneActive ? boostLaneSpeedMult : normalLaneSpeedMult)
       );
 
-      if (boostLaneActive || this.quizStreak >= 3 || manualMaxed) {
+      const manualTurbo = gaugeFactor > 0.05 ? 2.2 * gaugeFactor : 0;
+      if (boostLaneActive || this.quizStreak >= 3 || manualTurbo > 0) {
         const streakTurbo =
           this.quizStreak >= 3 ? 1.5 + Math.min(1.2, (this.quizStreak - 3) * 0.4) : 0;
-        const manualTurbo = manualMaxed ? 2.2 : 0;
         r.superTurboTimer = Math.max(
           r.superTurboTimer,
           boostLaneActive ? Math.max(3.6 * r.itemPower, manualTurbo) : Math.max(streakTurbo, manualTurbo)
         );
-        r.accelSurgeTimer = Math.max(r.accelSurgeTimer, (manualMaxed ? 4.4 : 4.0) * r.itemPower);
+        if (boostLaneActive || this.quizStreak >= 3) {
+          r.accelSurgeTimer = Math.max(r.accelSurgeTimer, (4.0 + 0.4 * gaugeFactor) * r.itemPower);
+        }
       }
 
       if (!isTimeAttack) {
@@ -1963,15 +1989,21 @@ export class RaceEngine {
         bigBoost
       );
 
+      const gaugePct = Math.round(gaugeFactor * 100);
+      const gaugeTag = manualMaxed
+        ? 'マニュアル最大ブースト発動！'
+        : gaugePct >= 25
+          ? `マニュアルブースト (${gaugePct}%)`
+          : 'ターボ加速！';
       const streakTag = this.quizStreak >= 2 ? ` · ${this.quizStreak}連続正解!` : '';
       if (isTimeAttack) {
         this.quizFeedback = {
           correct: true,
           termName: choice.term.name,
-          message: `${manualMaxed ? 'マニュアル最大ブースト発動！' : 'ターボ加速！'}${streakTag}`,
+          message: `${gaugeTag}${streakTag}`,
         };
         this.pushEventNotice(
-          `正解！「${choice.term.name}」${manualMaxed ? ' + マニュアル最大ブースト!' : ''}${streakTag}`
+          `正解！「${choice.term.name}」${manualMaxed ? ' + マニュアル最大ブースト!' : gaugePct >= 25 ? ` + ブースト(${gaugePct}%)` : ''}${streakTag}`
         );
       } else if (choice.itemKind === 'boost') {
         this.quizFeedback = {
@@ -1981,10 +2013,15 @@ export class RaceEngine {
         };
         this.pushEventNotice(`正解！「${choice.term.name}」パーツ獲得 + HYPER TURBO!${streakTag}`);
       } else {
+        const subBoostLabel = manualMaxed
+          ? 'マニュアル強化ターボ'
+          : gaugePct >= 25
+            ? `マニュアルターボ(${gaugePct}%)`
+            : 'ターボ加速';
         this.quizFeedback = {
           correct: true,
           termName: choice.term.name,
-          message: `${manualMaxed ? 'マニュアル強化ターボ' : 'ターボ加速'} + ${SUB_ITEMS[choice.itemKind].name}獲得${streakTag}`,
+          message: `${subBoostLabel} + ${SUB_ITEMS[choice.itemKind].name}獲得${streakTag}`,
         };
         this.pushEventNotice(
           `正解！「${choice.term.name}」パーツ獲得 + ${SUB_ITEMS[choice.itemKind].name}${streakTag}`
@@ -1992,7 +2029,7 @@ export class RaceEngine {
       }
       this.quizFeedbackTimer = 8.0;
     } else {
-      // Wrong answer: reset streak, record review entry, hidden machine-specific spin penalty
+      // Wrong answer: reset streak, preserve manualGauge so player can carry progress into next gate
       this.quizStreak = 0;
       this.missedQuestions.push({
         termId: quiz.targetTerm.term.id,
@@ -2030,6 +2067,7 @@ export class RaceEngine {
     this.assistedLaneIndex = null;
     this.quizGatesCleared += 1;
     this.nextQuizRowIndex = (this.nextQuizRowIndex + 1) % this.itemSystem.rows.length;
+    this.updateCurrentSegmentS(row.s);
     this.emitTelemetry();
   }
 
@@ -2189,6 +2227,7 @@ export class RaceEngine {
   }
 
   private applyHitToRacer(r: RacerState, sourceLabel: string, stunDuration = 1.4): void {
+    if (r.finished) return;
     if (r.shieldTimer > 0) {
       r.shieldTimer = 0;
       this.track.sampleAtS(r.s, _sample);
@@ -2392,7 +2431,7 @@ export class RaceEngine {
     }
   }
 
-  private updateLapProgress(r: RacerState): void {
+  private updateLapProgress(r: RacerState, dt: number): void {
     if (r.finished) return;
 
     // Anti-cheat 3-sector check
@@ -2402,8 +2441,11 @@ export class RaceEngine {
 
     // Crossed finish line forward (prevS > 0.88 and s < 0.12)
     if (r.prevS > 0.88 && r.s < 0.12 && r.sectorFlags === 7) {
-      const lapTime = this.raceElapsedMs - r.lapStartMs;
-      r.lapStartMs = this.raceElapsedMs;
+      const deltaS = (1 - r.prevS) + r.s;
+      const fractionAfterLine = deltaS > 1e-6 ? Math.min(1, Math.max(0, r.s / deltaS)) : 0;
+      const exactCrossMs = Math.max(0, this.raceElapsedMs - fractionAfterLine * dt * 1000);
+      const lapTime = exactCrossMs - r.lapStartMs;
+      r.lapStartMs = exactCrossMs;
       r.sectorFlags = 0;
       r.lapTimesMs.push(lapTime);
 
@@ -2424,7 +2466,7 @@ export class RaceEngine {
       const totalLaps = this.getTotalLaps();
       if (r.lap >= totalLaps) {
         r.finished = true;
-        r.finishTimeMs = this.raceElapsedMs;
+        r.finishTimeMs = exactCrossMs;
         if (r.isPlayer) {
           this.phase = 'finishing';
           this.finishCelebrationTimer = 1.25;
@@ -2517,8 +2559,8 @@ export class RaceEngine {
         const distSq = a.pos.distanceToSquared(b.pos);
 
         if (distSq < checkDist * checkDist && distSq > 0.0001) {
-          // Hyper Glow contact spin against rival machines
-          if (distSq < 4.4 * 4.4) {
+          // Hyper Glow contact spin against rival machines (ignore already-finished racers)
+          if (distSq < 4.4 * 4.4 && !a.finished && !b.finished) {
             if (a.glowBoostTimer > 0 && b.glowBoostTimer <= 0 && (a.isPlayer || !b.isPlayer)) {
               const prevGrace = b.postHitGraceTimer;
               this.applyHitToRacer(b, 'Hyper Glow', 1.35 * Math.min(1.3, a.itemPower));
@@ -2904,7 +2946,9 @@ export class RaceEngine {
       totalRacers: this.racers.length,
       lap: Math.min(this.playerRacer.lap, totalLaps),
       totalLaps,
-      currentLapMs: Math.max(0, this.raceElapsedMs - this.playerRacer.lapStartMs),
+      currentLapMs: this.playerRacer.finished
+        ? (this.playerRacer.lapTimesMs[this.playerRacer.lapTimesMs.length - 1] ?? 0)
+        : Math.max(0, this.raceElapsedMs - this.playerRacer.lapStartMs),
       lapTimesMs: [...this.playerRacer.lapTimesMs],
       bestLapMs: this.playerRacer.bestLapMs,
       totalRaceMs: this.playerRacer.finished ? this.playerRacer.finishTimeMs : this.raceElapsedMs,
@@ -2953,6 +2997,7 @@ export class RaceEngine {
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
+    window.removeEventListener('blur', this.handleWindowBlur);
 
     this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost);
     this.renderer.domElement.removeEventListener('webglcontextrestored', this.handleContextRestored);
