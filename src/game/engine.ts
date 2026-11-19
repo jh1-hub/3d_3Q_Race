@@ -778,7 +778,7 @@ export class RaceEngine {
         secondary: 0xf59e0b,
         accent: 0xfbbf24,
         hex: '#F59E0B',
-        speedFactor: 0.98,
+        speedFactor: 1.0,
         offset: -4.2,
         itemPower: 1.0,
       },
@@ -790,7 +790,7 @@ export class RaceEngine {
         secondary: 0xef4444,
         accent: 0xf43f5e,
         hex: '#F43F5E',
-        speedFactor: 0.95,
+        speedFactor: 0.975,
         offset: 4.2,
         itemPower: 1.05,
       },
@@ -802,7 +802,7 @@ export class RaceEngine {
         secondary: 0xd1fae5,
         accent: 0x10b981,
         hex: '#10B981',
-        speedFactor: 0.92,
+        speedFactor: 0.955,
         offset: -1.8,
         itemPower: 0.95,
       },
@@ -1624,43 +1624,42 @@ export class RaceEngine {
     const isHard = this.speedClass === 'hard';
     if (!isFinalStretch && !this.playerRacer.finished) {
       if (isHard) {
-        // Hard class: aggressive pack tension without slowing down to wait when player misses quizzes
+        // Hard class: relentless pace (never waits when ahead) + aggressive chase buff when trailing
         if (gap > 0.06) {
-          rubberBand = 1.62;
-        } else if (gap > 0.015) {
-          rubberBand = THREE.MathUtils.clamp(1.08 + gap * 7.5, 1.08, 1.54);
-        } else if (gap < -0.025) {
-          rubberBand = THREE.MathUtils.clamp(1.0 + gap * 0.20, 0.95, 1.01);
-        } else {
-          rubberBand = 1.06;
-        }
-      } else {
-        // Normal class: competitive honest pace — stays steady if player falls behind instead of waiting
-        if (gap > 0.08) {
-          rubberBand = 1.14;
-        } else if (gap > 0.02) {
-          rubberBand = THREE.MathUtils.clamp(1.01 + gap * 2.2, 1.01, 1.12);
-        } else if (gap < -0.02) {
-          rubberBand = THREE.MathUtils.clamp(1.00 + gap * 0.14, 0.97, 1.00);
+          rubberBand = 1.28;
+        } else if (gap > 0.01) {
+          rubberBand = THREE.MathUtils.clamp(1.05 + gap * 4.6, 1.05, 1.25);
         } else {
           rubberBand = 1.01;
         }
+      } else {
+        // Normal class: strong baseline without waiting + chase acceleration buff to keep battles intense
+        if (gap > 0.08) {
+          rubberBand = 1.16;
+        } else if (gap > 0.015) {
+          rubberBand = THREE.MathUtils.clamp(1.02 + gap * 2.4, 1.02, 1.15);
+        } else {
+          rubberBand = 1.0;
+        }
       }
-    } else {
-      // Final sprint after Gate 1: stay naturally fast without slowing down to hand over wins
+    } else if (!this.playerRacer.finished && gap > 0.015) {
+      // Final sprint while trailing: keep chasing hard without slowing down
       rubberBand = isHard
-        ? THREE.MathUtils.clamp(1.02 + gap * 0.20, 0.98, 1.05)
-        : THREE.MathUtils.clamp(0.99 + gap * 0.18, 0.96, 1.01);
+        ? THREE.MathUtils.clamp(1.04 + gap * 3.5, 1.04, 1.20)
+        : THREE.MathUtils.clamp(1.01 + gap * 2.0, 1.01, 1.12);
+    } else {
+      // Final sprint when ahead or after player finishes: full pace through the line
+      rubberBand = isHard ? 1.01 : 1.0;
     }
 
-    // Fixed reference speed (~VALKYRIE-X class) so player's machine choice genuinely differentiates pace vs handling
-    const baseAiSpeed = (434 / 3.6) * classMultiplier;
+    // Elevated AI baseline (~468 km/h Normal / ~546 km/h Hard) so 1st place demands accuracy + driving skill
+    const hardAiExtra = isHard ? 1.06 : 1.0;
+    const baseAiSpeed = (468 / 3.6) * classMultiplier * hardAiExtra;
     const playerFollowCap =
       isHard && !isFinalStretch && gap > 0.012
-        ? Math.max(baseAiSpeed, this.playerRacer.speed * 1.18)
+        ? Math.max(baseAiSpeed, this.playerRacer.speed * 1.12)
         : baseAiSpeed;
 
-    const finalLapEase = isFinalStretch ? (isHard ? 0.99 : 0.98) : 1.0;
     const missSurgeMult =
       !r.isPlayer && !r.finished && this.aiMissSurgeTimer > 0
         ? isHard
@@ -1673,13 +1672,12 @@ export class RaceEngine {
     const targetMax =
       playerFollowCap *
       r.aiBaseSpeedFactor *
-      finalLapEase *
       missSurgeMult *
       (r.hitSpinTimer > 0 ? 0.50 : 1.0) *
       (r.isPlayer && this.phase === 'finishing'
-        ? 0.94
+        ? 0.85
         : r.isPlayer && this.phase === 'finished'
-          ? 0.72
+          ? 0.68
           : rubberBand) *
       (r.accelSurgeTimer > 0 ? 1.2 : 1.0) *
       glowMult *
