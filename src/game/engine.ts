@@ -15,6 +15,7 @@ import {
   GhostSummary,
   HitAlertTelemetry,
   IncomingThreatType,
+  isMachineUnlocked,
   MACHINES,
   MachineId,
   MachineSpec,
@@ -33,6 +34,8 @@ import {
 import {
   GeneratedQuiz,
   generateQuizChallenge,
+  getCollectionProgress,
+  loadCardCollection,
   recordCollectedCard,
   recordTermAnswer,
 } from '../utils/cardCollection';
@@ -306,6 +309,7 @@ export class RaceEngine {
   private quizLanesRevealed = false;
   private usedTermIds = new Set<number>();
   private earnedCards: EarnedRaceCard[] = [];
+  private newlyUnlockedMachines: MachineId[] = [];
   private missedQuestions: MissedQuizReview[] = [];
   private quizAttempts = 0;
   private quizCorrectCount = 0;
@@ -595,6 +599,8 @@ export class RaceEngine {
   }
 
   public setMachine(id: MachineId): void {
+    const collectedParts = getCollectionProgress(loadCardCollection()).collectedTerms;
+    if (!isMachineUnlocked(id, collectedParts)) return;
     if (this.machineId === id) return;
     this.machineId = id;
     if (this.phase === 'menu') {
@@ -639,6 +645,10 @@ export class RaceEngine {
   }
 
   public startRace(): void {
+    const collectedParts = getCollectionProgress(loadCardCollection()).collectedTerms;
+    if (!isMachineUnlocked(this.machineId, collectedParts)) {
+      this.machineId = 'phantom';
+    }
     this.audio.init();
     this.keys = {};
     this.itemSystem.resetDynamicHazards();
@@ -669,6 +679,7 @@ export class RaceEngine {
     this.quizLanesRevealed = false;
     this.usedTermIds.clear();
     this.earnedCards = [];
+    this.newlyUnlockedMachines = [];
     this.missedQuestions = [];
     this.quizAttempts = 0;
     this.quizCorrectCount = 0;
@@ -733,6 +744,7 @@ export class RaceEngine {
     this.quizGatesCleared = 0;
     this.activeQuiz = null;
     this.quizLanesRevealed = false;
+    this.newlyUnlockedMachines = [];
     this.missedQuestions = [];
     this.quizStreak = 0;
     this.bestQuizStreak = 0;
@@ -1951,7 +1963,7 @@ export class RaceEngine {
       }
 
       const targetMeta = quiz.targetTerm;
-      const { isNew, count } = recordCollectedCard(targetMeta.term.id);
+      const { collection: updatedCollection, isNew, count } = recordCollectedCard(targetMeta.term.id);
       this.earnedCards.push({
         termId: targetMeta.term.id,
         name: targetMeta.term.name,
@@ -1961,6 +1973,23 @@ export class RaceEngine {
         isNew,
         unlockedCount: count,
       });
+      const unlockedHere: string[] = [];
+      if (isNew) {
+        const nextCollectedCount = getCollectionProgress(updatedCollection).collectedTerms;
+        const prevCollectedCount = Math.max(0, nextCollectedCount - 1);
+        for (const m of MACHINES) {
+          if (
+            m.unlockRequiredParts > 0 &&
+            prevCollectedCount < m.unlockRequiredParts &&
+            nextCollectedCount >= m.unlockRequiredParts
+          ) {
+            if (!this.newlyUnlockedMachines.includes(m.id)) {
+              this.newlyUnlockedMachines.push(m.id);
+            }
+            unlockedHere.push(m.name);
+          }
+        }
+      }
       this.onCollectionChange?.();
 
       // Correct answer: clear any lingering quiz drag, consume manual gauge for proportional turbo boost
@@ -2031,6 +2060,8 @@ export class RaceEngine {
           ? `マニュアルブースト (${gaugePct}%)`
           : 'ターボ加速！';
       const streakTag = this.quizStreak >= 2 ? ` · ${this.quizStreak}連続正解!` : '';
+      const unlockBannerTag =
+        unlockedHere.length > 0 ? ` · NEW MACHINE解放: ${unlockedHere.join(', ')}!` : '';
       if (isTimeAttack) {
         this.quizFeedback = {
           correct: true,
@@ -2038,7 +2069,7 @@ export class RaceEngine {
           message: `${gaugeTag}${streakTag}`,
         };
         this.pushEventNotice(
-          `正解！「${choice.term.name}」${manualMaxed ? ' + マニュアル最大ブースト!' : gaugePct >= 25 ? ` + ブースト(${gaugePct}%)` : ''}${streakTag}`
+          `正解！「${choice.term.name}」${manualMaxed ? ' + マニュアル最大ブースト!' : gaugePct >= 25 ? ` + ブースト(${gaugePct}%)` : ''}${streakTag}${unlockBannerTag}`
         );
       } else if (choice.itemKind === 'boost') {
         this.quizFeedback = {
@@ -2046,7 +2077,9 @@ export class RaceEngine {
           termName: choice.term.name,
           message: `HYPER TURBO発動！${streakTag}`,
         };
-        this.pushEventNotice(`正解！「${choice.term.name}」パーツ獲得 + HYPER TURBO!${streakTag}`);
+        this.pushEventNotice(
+          `正解！「${choice.term.name}」パーツ獲得 + HYPER TURBO!${streakTag}${unlockBannerTag}`
+        );
       } else {
         const subBoostLabel = manualMaxed
           ? 'マニュアル強化ターボ'
@@ -2059,7 +2092,7 @@ export class RaceEngine {
           message: `${subBoostLabel} + ${SUB_ITEMS[choice.itemKind].name}獲得${streakTag}`,
         };
         this.pushEventNotice(
-          `正解！「${choice.term.name}」パーツ獲得 + ${SUB_ITEMS[choice.itemKind].name}${streakTag}`
+          `正解！「${choice.term.name}」パーツ獲得 + ${SUB_ITEMS[choice.itemKind].name}${streakTag}${unlockBannerTag}`
         );
       }
       this.quizFeedbackTimer = 8.0;
@@ -3027,6 +3060,7 @@ export class RaceEngine {
       activeQuiz: activeQuizTelemetry,
       quizFeedback: this.quizFeedback,
       earnedCards: [...this.earnedCards],
+      newlyUnlockedMachines: [...this.newlyUnlockedMachines],
       missedQuestions: [...this.missedQuestions],
       quizAttempts: this.quizAttempts,
       quizCorrectCount: this.quizCorrectCount,

@@ -396,6 +396,7 @@ export interface MachineSpec {
   chassisStyle: ChassisStyle;
   name: string;
   subtitle: string;
+  unlockRequiredParts: number;
   bodyColor: number;
   secondaryColor: number;
   accentColor: number;
@@ -416,6 +417,7 @@ export const MACHINES: MachineSpec[] = [
     chassisStyle: 'phantom',
     name: 'PHANTOM-V',
     subtitle: '安定性・アイテム性能特化',
+    unlockRequiredParts: 0,
     bodyColor: 0x991b1b,
     secondaryColor: 0xf8fafc,
     accentColor: 0x38bdf8,
@@ -430,6 +432,7 @@ export const MACHINES: MachineSpec[] = [
     chassisStyle: 'valkyrie',
     name: 'VALKYRIE-X',
     subtitle: 'バランス型',
+    unlockRequiredParts: 12,
     bodyColor: 0xf1f5f9,
     secondaryColor: 0x1e3a8a,
     accentColor: 0x06b6d4,
@@ -444,6 +447,7 @@ export const MACHINES: MachineSpec[] = [
     chassisStyle: 'tempest',
     name: 'TEMPEST-R',
     subtitle: '最高速度特化',
+    unlockRequiredParts: 60,
     bodyColor: 0x18181b,
     secondaryColor: 0xb45309,
     accentColor: 0xf59e0b,
@@ -454,6 +458,12 @@ export const MACHINES: MachineSpec[] = [
     stats: { speed: 98, accel: 78, itemPower: 72 },
   },
 ];
+
+export function isMachineUnlocked(machineId: MachineId, collectedPartsCount: number): boolean {
+  const spec = MACHINES.find((m) => m.id === machineId);
+  if (!spec) return false;
+  return collectedPartsCount >= spec.unlockRequiredParts;
+}
 
 export interface MinimapMarker {
   id: string;
@@ -598,6 +608,7 @@ export interface RaceTelemetry {
   activeQuiz: ActiveQuizTelemetry | null;
   quizFeedback: QuizFeedbackTelemetry | null;
   earnedCards: EarnedRaceCard[];
+  newlyUnlockedMachines: MachineId[];
   missedQuestions: MissedQuizReview[];
   quizAttempts: number;
   quizCorrectCount: number;

@@ -9,10 +9,12 @@ import {
   Flag,
   Layers,
   Loader2,
+  Lock,
   MapPin,
   Play,
   RotateCcw,
   Settings,
+  Sparkles,
   Timer,
   Trophy,
   Volume2,
@@ -22,6 +24,7 @@ import {
   COURSES,
   GameMode,
   getSubCoursesForBase,
+  isMachineUnlocked,
   MACHINES,
   MachineId,
   RaceTelemetry,
@@ -510,6 +513,37 @@ export function MenuOverlay({
             </div>
           </div>
 
+          {telemetry.newlyUnlockedMachines.length > 0 && (
+            <div className="mt-3 rounded-xl border border-amber-400/45 bg-amber-500/12 px-3.5 py-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-amber-300 shrink-0" />
+                  <span className="font-display text-xs font-bold tracking-wider text-amber-200">
+                    NEW MACHINE UNLOCKED!
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {telemetry.newlyUnlockedMachines.map((mId) => {
+                    const spec = MACHINES.find((m) => m.id === mId);
+                    if (!spec) return null;
+                    return (
+                      <span
+                        key={mId}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-white/15 bg-slate-950/80 px-2 py-0.5 font-display text-xs font-bold text-white"
+                      >
+                        <span
+                          className="h-2 w-2 rounded-sm"
+                          style={{ backgroundColor: spec.accentHex }}
+                        />
+                        {spec.name}（{spec.subtitle}）
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
           {isFinishedTA && (
             <div
               className={`mt-3 rounded-xl border px-3.5 py-2 text-[11px] ${
@@ -653,6 +687,7 @@ export function MenuOverlay({
   }
 
   const activeSpec = MACHINES.find((m) => m.id === selectedMachine) ?? MACHINES[0];
+  const nextLockedMachine = MACHINES.find((m) => !isMachineUnlocked(m.id, collectedCount)) ?? null;
 
   return (
     <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-6 overflow-hidden">
@@ -866,11 +901,17 @@ export function MenuOverlay({
               onChange={(e) => onSelectMachine(e.target.value as MachineId)}
               className="min-h-[42px] w-full appearance-none rounded-xl border border-white/15 bg-slate-950/90 pl-9 pr-8 text-xs font-bold text-white focus:border-cyan-400 focus:outline-none cursor-pointer truncate"
             >
-              {MACHINES.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}（{m.subtitle}）
-                </option>
-              ))}
+              {MACHINES.map((m) => {
+                const unlocked = isMachineUnlocked(m.id, collectedCount);
+                const remaining = Math.max(0, m.unlockRequiredParts - collectedCount);
+                return (
+                  <option key={m.id} value={m.id} disabled={!unlocked}>
+                    {unlocked
+                      ? `${m.name}（${m.subtitle}）`
+                      : `🔒 ${m.name}（図鑑${m.unlockRequiredParts}個で解放 · あと${remaining}）`}
+                  </option>
+                );
+              })}
             </select>
             <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           </div>
@@ -900,6 +941,18 @@ export function MenuOverlay({
             </button>
           </div>
         </div>
+
+        {nextLockedMachine && (
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-400/20 bg-amber-500/8 px-2.5 py-1 text-[10px] text-amber-200">
+            <span className="flex items-center gap-1 font-semibold truncate">
+              <Lock className="h-3 w-3 text-amber-400 shrink-0" />
+              次機体解放: {nextLockedMachine.name}
+            </span>
+            <span className="font-mono-num shrink-0 text-amber-300">
+              {collectedCount}/{nextLockedMachine.unlockRequiredParts}（あと{nextLockedMachine.unlockRequiredParts - collectedCount}個）
+            </span>
+          </div>
+        )}
 
         {/* Mobile Time Attack Ghost Toggles & Best Total (Compact 1-Row) */}
         {isTimeAttack && (
@@ -1066,20 +1119,28 @@ export function MenuOverlay({
           {/* 3 Machine Cards */}
           <div className="col-span-7 grid grid-cols-3 gap-2">
             {MACHINES.map((m) => {
-              const selected = m.id === selectedMachine;
+              const unlocked = isMachineUnlocked(m.id, collectedCount);
+              const remaining = Math.max(0, m.unlockRequiredParts - collectedCount);
+              const selected = unlocked && m.id === selectedMachine;
               return (
                 <button
                   key={m.id}
                   type="button"
-                  onClick={() => onSelectMachine(m.id)}
-                  className={`flex flex-col rounded-xl border p-2.5 text-left transition-colors cursor-pointer ${
-                    selected
-                      ? 'border-cyan-400 bg-cyan-500/12'
-                      : 'border-white/10 bg-slate-900/70 hover:border-white/25'
+                  disabled={!unlocked}
+                  onClick={() => {
+                    if (unlocked) onSelectMachine(m.id);
+                  }}
+                  className={`flex flex-col rounded-xl border p-2.5 text-left transition-colors ${
+                    !unlocked
+                      ? 'border-white/8 bg-slate-950/75 opacity-75 cursor-not-allowed'
+                      : selected
+                        ? 'border-cyan-400 bg-cyan-500/12 cursor-pointer'
+                        : 'border-white/10 bg-slate-900/70 hover:border-white/25 cursor-pointer'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-display text-sm font-bold tracking-wide text-white">
+                    <span className="flex items-center gap-1.5 font-display text-sm font-bold tracking-wide text-white">
+                      {!unlocked && <Lock className="h-3.5 w-3.5 text-amber-400 shrink-0" />}
                       {m.name}
                     </span>
                     <div className="flex items-center gap-1 shrink-0">
@@ -1098,26 +1159,48 @@ export function MenuOverlay({
                     </div>
                   </div>
                   <span className="mt-0.5 text-[11px] text-slate-400">{m.subtitle}</span>
-                  <div className="mt-2 space-y-1 font-display text-[10px] tracking-wider text-slate-300">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>TOP SPEED</span>
-                      <div className="h-1.5 w-18 overflow-hidden rounded-sm bg-slate-800">
-                        <div className="h-full bg-cyan-400" style={{ width: `${m.stats.speed}%` }} />
+                  {!unlocked ? (
+                    <div className="mt-2 space-y-1.5">
+                      <div className="flex items-center justify-between text-[10px] font-semibold text-amber-300">
+                        <span className="font-mono-num">
+                          PARTS {collectedCount}/{m.unlockRequiredParts}
+                        </span>
+                        <span className="font-mono-num text-slate-300">あと{remaining}個</span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-sm bg-slate-800">
+                        <div
+                          className="h-full bg-amber-400"
+                          style={{
+                            width: `${Math.min(100, Math.round((collectedCount / m.unlockRequiredParts) * 100))}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        Parts Collection {m.unlockRequiredParts}個で解放
                       </div>
                     </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span>ACCEL</span>
-                      <div className="h-1.5 w-18 overflow-hidden rounded-sm bg-slate-800">
-                        <div className="h-full bg-amber-400" style={{ width: `${m.stats.accel}%` }} />
+                  ) : (
+                    <div className="mt-2 space-y-1 font-display text-[10px] tracking-wider text-slate-300">
+                      <div className="flex items-center justify-between gap-2">
+                        <span>TOP SPEED</span>
+                        <div className="h-1.5 w-18 overflow-hidden rounded-sm bg-slate-800">
+                          <div className="h-full bg-cyan-400" style={{ width: `${m.stats.speed}%` }} />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>ACCEL</span>
+                        <div className="h-1.5 w-18 overflow-hidden rounded-sm bg-slate-800">
+                          <div className="h-full bg-amber-400" style={{ width: `${m.stats.accel}%` }} />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>ITEM POWER</span>
+                        <div className="h-1.5 w-18 overflow-hidden rounded-sm bg-slate-800">
+                          <div className="h-full bg-purple-400" style={{ width: `${m.stats.itemPower}%` }} />
+                        </div>
                       </div>
                     </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span>ITEM POWER</span>
-                      <div className="h-1.5 w-18 overflow-hidden rounded-sm bg-slate-800">
-                        <div className="h-full bg-purple-400" style={{ width: `${m.stats.itemPower}%` }} />
-                      </div>
-                    </div>
-                  </div>
+                  )}
                 </button>
               );
             })}

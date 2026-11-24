@@ -5,9 +5,9 @@ import { RaceHud, TouchDragIndicator } from './components/RaceHud';
 import { SettingsModal } from './components/SettingsModal';
 import { BgmManager } from './game/bgm';
 import { RaceEngine } from './game/engine';
-import { GameMode, MachineId, RaceTelemetry, resolveSubCourse, SpeedClass } from './game/types';
+import { GameMode, isMachineUnlocked, MachineId, RaceTelemetry, resolveSubCourse, SpeedClass } from './game/types';
 import { CardCollectionMap, TermStats } from './types';
-import { loadCardCollection, loadTermStats } from './utils/cardCollection';
+import { getCollectionProgress, loadCardCollection, loadTermStats } from './utils/cardCollection';
 import { useOnlineStatus } from './utils/pwa';
 import {
   GameSettings,
@@ -65,6 +65,7 @@ const INITIAL_TELEMETRY: RaceTelemetry = {
   activeQuiz: null,
   quizFeedback: null,
   earnedCards: [],
+  newlyUnlockedMachines: [],
   missedQuestions: [],
   quizAttempts: 0,
   quizCorrectCount: 0,
@@ -318,7 +319,17 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    const collectedCount = getCollectionProgress(collection).collectedTerms;
+    if (!isMachineUnlocked(selectedMachine, collectedCount)) {
+      setSelectedMachine('phantom');
+      engineRef.current?.setMachine('phantom');
+    }
+  }, [collection, selectedMachine]);
+
   const handleSelectMachine = useCallback((id: MachineId) => {
+    const collectedCount = getCollectionProgress(loadCardCollection()).collectedTerms;
+    if (!isMachineUnlocked(id, collectedCount)) return;
     setSelectedMachine(id);
     engineRef.current?.setMachine(id);
   }, []);
