@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GeneratedLaneChoice } from '../utils/cardCollection';
+import { ProceduralTextures } from './textures';
 import { TrackData, TrackSample } from './track';
 import { SUB_ITEMS, SubItemType } from './types';
 
@@ -149,6 +150,7 @@ function wrapJapaneseText(
 export class TrackItemSystem {
   private scene: THREE.Scene;
   private track: TrackData;
+  private courseTextures?: ProceduralTextures;
   public rows: QuizGateRow[] = [];
   public missiles: ActiveMissile[] = [];
   public lasers: ActiveLaser[] = [];
@@ -196,9 +198,15 @@ export class TrackItemSystem {
   private burstSphereGeo: THREE.BufferGeometry;
   private burstPillarGeo: THREE.BufferGeometry;
 
-  constructor(scene: THREE.Scene, track: TrackData, maxAnisotropy = 4) {
+  constructor(
+    scene: THREE.Scene,
+    track: TrackData,
+    maxAnisotropy = 4,
+    courseTextures?: ProceduralTextures
+  ) {
     this.scene = scene;
     this.track = track;
+    this.courseTextures = courseTextures;
 
     // 1. Boost pickup
     const boostCoreGeo = this.trackGeo(new THREE.ConeGeometry(0.84, 1.7, 6));
@@ -333,19 +341,29 @@ export class TrackItemSystem {
     // Wide holographic floor gate pad + 34m approach runway guide for each of the 4 lanes
     const floorPadGeo = this.trackGeo(new THREE.PlaneGeometry(6.5, 6.4));
     floorPadGeo.rotateX(-Math.PI / 2);
+    floorPadGeo.rotateY(Math.PI);
     const approachStripGeo = this.trackGeo(new THREE.PlaneGeometry(6.1, 34));
     approachStripGeo.rotateX(-Math.PI / 2);
+    approachStripGeo.rotateY(Math.PI);
 
-    // Overhead signboard plane + side holographic struts
+    // Overhead signboard plane + side holographic portal struts
     const signGeo = this.trackGeo(new THREE.PlaneGeometry(6.4, 2.5));
-    const strutGeo = this.trackGeo(new THREE.BoxGeometry(0.14, 4.8, 0.14));
+    const strutGeo = this.trackGeo(new THREE.BoxGeometry(0.18, 4.9, 0.22));
+    const strutBaseGeo = this.trackGeo(new THREE.BoxGeometry(0.46, 0.34, 0.48));
+    const strutNeonGeo = this.trackGeo(new THREE.BoxGeometry(0.06, 4.5, 0.08));
+    const topCrossbarGeo = this.trackGeo(new THREE.BoxGeometry(6.6, 0.14, 0.22));
     const strutMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: 0x1e293b,
+        color: 0x162235,
         emissive: 0x0ea5e9,
-        emissiveIntensity: 0.75,
-        metalness: 0.7,
-        roughness: 0.3,
+        emissiveIntensity: 0.45,
+        metalness: 0.78,
+        roughness: 0.28,
+      })
+    );
+    const strutNeonMat = this.trackMat(
+      new THREE.MeshBasicMaterial({
+        color: 0x22d3ee,
       })
     );
 
@@ -550,10 +568,13 @@ export class TrackItemSystem {
 
         const padMat = this.trackMat(
           new THREE.MeshBasicMaterial({
+            map: courseTextures?.gatePadTexture ?? null,
             color: 0x06b6d4,
             transparent: true,
-            opacity: 0.42,
+            opacity: courseTextures ? 0.65 : 0.42,
             side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
             polygonOffset: true,
             polygonOffsetFactor: -2,
             polygonOffsetUnits: -2,
@@ -565,10 +586,13 @@ export class TrackItemSystem {
 
         const approachMat = this.trackMat(
           new THREE.MeshBasicMaterial({
-            color: 0x0ea5e9,
+            map: courseTextures?.approachRunwayTexture ?? null,
+            color: courseTextures ? 0x7dd3fc : 0x0ea5e9,
             transparent: true,
-            opacity: 0.14,
+            opacity: courseTextures ? 0.58 : 0.14,
             side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
             polygonOffset: true,
             polygonOffsetFactor: -1,
             polygonOffsetUnits: -1,
@@ -601,11 +625,20 @@ export class TrackItemSystem {
         group.add(signMesh);
 
         const leftStrut = new THREE.Mesh(strutGeo, strutMat);
-        leftStrut.position.set(3.2, 2.4, 0);
+        leftStrut.position.set(3.22, 2.45, 0);
         const rightStrut = new THREE.Mesh(strutGeo, strutMat);
-        rightStrut.position.set(-3.2, 2.4, 0);
-        group.add(leftStrut);
-        group.add(rightStrut);
+        rightStrut.position.set(-3.22, 2.45, 0);
+        const leftBoot = new THREE.Mesh(strutBaseGeo, strutMat);
+        leftBoot.position.set(3.22, 0.17, 0);
+        const rightBoot = new THREE.Mesh(strutBaseGeo, strutMat);
+        rightBoot.position.set(-3.22, 0.17, 0);
+        const leftNeon = new THREE.Mesh(strutNeonGeo, strutNeonMat);
+        leftNeon.position.set(3.11, 2.45, 0);
+        const rightNeon = new THREE.Mesh(strutNeonGeo, strutNeonMat);
+        rightNeon.position.set(-3.11, 2.45, 0);
+        const topCrossbar = new THREE.Mesh(topCrossbarGeo, strutMat);
+        topCrossbar.position.set(0, 4.92, 0.08);
+        group.add(leftStrut, rightStrut, leftBoot, rightBoot, leftNeon, rightNeon, topCrossbar);
 
         group.quaternion.setFromRotationMatrix(rowBasis);
         group.position.copy(_sample.position).addScaledVector(_sample.right, lat);
@@ -650,17 +683,40 @@ export class TrackItemSystem {
 
     ctx.clearRect(0, 0, w, h);
 
-    ctx.fillStyle = 'rgba(7, 11, 20, 0.92)';
+    // Dark translucent holographic backing
+    ctx.fillStyle = 'rgba(5, 9, 18, 0.93)';
     ctx.fillRect(4, 4, w - 8, h - 8);
+
+    // Subtle HUD scanlines
+    ctx.fillStyle = 'rgba(56, 189, 248, 0.04)';
+    for (let sy = 56; sy < h - 10; sy += 8) {
+      ctx.fillRect(10, sy, w - 20, 2);
+    }
 
     const accent =
       this.showItems && revealed && choice ? SUB_ITEMS[choice.itemKind].accentHex : '#06B6D4';
     ctx.strokeStyle = accent;
-    ctx.lineWidth = 6;
+    ctx.lineWidth = 4;
     ctx.strokeRect(7, 7, w - 14, h - 14);
 
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+    // Corner HUD bracket accents
+    ctx.fillStyle = accent;
+    const bLen = 22;
+    const bThick = 7;
+    ctx.fillRect(4, 4, bLen, bThick);
+    ctx.fillRect(4, 4, bThick, bLen);
+    ctx.fillRect(w - 4 - bLen, 4, bLen, bThick);
+    ctx.fillRect(w - 4 - bThick, 4, bThick, bLen);
+    ctx.fillRect(4, h - 4 - bThick, bLen, bThick);
+    ctx.fillRect(4, h - 4 - bLen, bThick, bLen);
+    ctx.fillRect(w - 4 - bLen, h - 4 - bThick, bLen, bThick);
+    ctx.fillRect(w - 4 - bThick, h - 4 - bLen, bThick, bLen);
+
+    // Header band + glowing divider
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.96)';
     ctx.fillRect(10, 10, w - 20, 44);
+    ctx.fillStyle = accent;
+    ctx.fillRect(10, 53, w - 20, 2);
 
     ctx.font = 'bold 26px "Chakra Petch", "Noto Sans JP", sans-serif';
     ctx.textBaseline = 'middle';
@@ -676,6 +732,8 @@ export class TrackItemSystem {
 
     ctx.textAlign = 'center';
     ctx.fillStyle = '#F8FAFC';
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 10;
 
     if (!revealed || !choice) {
       ctx.font = 'bold 40px "Chakra Petch", "Noto Sans JP", sans-serif';
@@ -692,6 +750,7 @@ export class TrackItemSystem {
         ctx.fillText(lines[1], w / 2, h / 2 + 42);
       }
     }
+    ctx.shadowBlur = 0;
 
     slot.signTexture.needsUpdate = true;
   }
@@ -1020,6 +1079,11 @@ export class TrackItemSystem {
   }
 
   public update(dt: number, elapsed: number): void {
+    if (this.courseTextures) {
+      this.courseTextures.approachRunwayTexture.offset.y =
+        (((this.courseTextures.approachRunwayTexture.offset.y - dt * 1.15) % 1) + 1) % 1;
+    }
+
     for (const row of this.rows) {
       if (!row.active) {
         if (row.respawnTimer < 500) {

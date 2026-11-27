@@ -1,5 +1,14 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { ChassisStyle } from './types';
+
+export interface MachineSurfaceTextures {
+  hullPanelBump: THREE.Texture;
+  hullPanelRoughness: THREE.Texture;
+  carbonWeaveAlbedo: THREE.Texture;
+  carbonWeaveBump: THREE.Texture;
+  titaniumBrushedBump: THREE.Texture;
+}
 
 export interface HypercarModel {
   root: THREE.Group;
@@ -15,10 +24,160 @@ export interface HypercarModel {
   dispose: () => void;
 }
 
+type BucketKey =
+  | 'hull'
+  | 'secondary'
+  | 'carbon'
+  | 'titanium'
+  | 'cockpitInterior'
+  | 'canopy'
+  | 'accentGlow'
+  | 'headlight'
+  | 'tailLight';
+
+interface SweptWingParams {
+  side: -1 | 1;
+  rootX: number;
+  tipX: number;
+  rootZFront: number;
+  rootZBack: number;
+  tipZFront: number;
+  tipZBack: number;
+  rootY: number;
+  tipY: number;
+  rootThick: number;
+  tipThick: number;
+  camberPeak?: number;
+}
+
 /**
- * Builds one of three distinct composite futuristic anti-grav hypercar silhouettes
- * ('valkyrie' delta GT, 'tempest' twin-prong spearhead, 'phantom' forward-swept stealth)
- * with two-tone PBR liveries, turbine pods, dynamic thrusters, contact shadow, and shield dome.
+ * Builds a clean non-indexed 3D swept tapered airfoil wing geometry for either side.
+ * Left side (-1) mirrors X and flips triangle winding so all normals point strictly outward.
+ */
+function createSweptWingGeometry(p: SweptWingParams): THREE.BufferGeometry {
+  const peak = p.camberPeak ?? 0.34;
+  const makeSection = (x: number, zF: number, zB: number, y: number, thick: number): [number, number, number][] => {
+    const chord = zF - zB;
+    const zPeak = zF - chord * peak;
+    const zMidB = zF - chord * 0.72;
+    return [
+      [x, y - thick * 0.08, zF], // 0: sharp leading edge
+      [x, y + thick * 0.56, zPeak], // 1: upper camber crest
+      [x, y + thick * 0.28, zMidB], // 2: upper aft slope
+      [x, y + thick * 0.04, zB], // 3: trailing edge
+      [x, y - thick * 0.22, zMidB], // 4: lower aft
+      [x, y - thick * 0.34, zPeak], // 5: lower belly
+    ];
+  };
+
+  const rootPts = makeSection(p.side * p.rootX, p.rootZFront, p.rootZBack, p.rootY, p.rootThick);
+  const tipPts = makeSection(p.side * p.tipX, p.tipZFront, p.tipZBack, p.tipY, p.tipThick);
+
+  const positions: number[] = [];
+  const pushTri = (a: [number, number, number], b: [number, number, number], c: [number, number, number]) => {
+    if (p.side === 1) {
+      positions.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+    } else {
+      // Reverse winding when mirrored across X
+      positions.push(a[0], a[1], a[2], c[0], c[1], c[2], b[0], b[1], b[2]);
+    }
+  };
+
+  const n = 6;
+  // Side airfoil panels (ordered so outward normal for side=+1 via (b-a)x(c-a))
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const r0 = rootPts[i];
+    const r1 = rootPts[j];
+    const t0 = tipPts[i];
+    const t1 = tipPts[j];
+    pushTri(r0, t0, t1);
+    pushTri(r0, t1, r1);
+  }
+
+  // Tip cap (+X on side=+1)
+  for (let i = 1; i < n - 1; i++) {
+    pushTri(tipPts[0], tipPts[i], tipPts[i + 1]);
+  }
+
+  // Root cap (-X on side=+1)
+  for (let i = 1; i < n - 1; i++) {
+    pushTri(rootPts[0], rootPts[i + 1], rootPts[i]);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.computeVertexNormals();
+  // Placeholder UVs (overwritten uniformly by box-projection before merging)
+  const vCount = positions.length / 3;
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(vCount * 2), 2));
+  return geo;
+}
+
+/**
+ * Applies world-space triplanar/box UV projection so procedural panel seams and carbon weave
+ * render at a consistent, distortion-free physical scale across every merged part.
+ */
+function applyBoxUVs(geo: THREE.BufferGeometry, uvScale: number): void {
+  const pos = geo.attributes.position;
+  const norm = geo.attributes.normal;
+  if (!pos || !norm) return;
+
+  const uvArr = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const nx = Math.abs(norm.getX(i));
+    const ny = Math.abs(norm.getY(i));
+    const nz = Math.abs(norm.getZ(i));
+
+    if (ny >= nx && ny >= nz) {
+      uvArr[i * 2] = x * uvScale;
+      uvArr[i * 2 + 1] = z * uvScale;
+    } else if (nx >= nz) {
+      uvArr[i * 2] = z * uvScale;
+      uvArr[i * 2 + 1] = y * uvScale;
+    } else {
+      uvArr[i * 2] = x * uvScale;
+      uvArr[i * 2 + 1] = y * uvScale;
+    }
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
+}
+
+function makeCenteredExtrude(
+  points: [number, number][],
+  depth: number,
+  bevelThickness = 0.08,
+  bevelSize = 0.06,
+  bevelSegments = 3
+): THREE.BufferGeometry {
+  const shape = new THREE.Shape();
+  shape.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) {
+    shape.lineTo(points[i][0], points[i][1]);
+  }
+  shape.closePath();
+
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth,
+    bevelEnabled: bevelThickness > 0 && bevelSize > 0,
+    bevelThickness,
+    bevelSize,
+    bevelSegments,
+  });
+  geo.translate(0, 0, -depth * 0.5);
+  geo.rotateY(-Math.PI / 2);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Builds one of six distinct composite futuristic anti-grav hypercar silhouettes
+ * (Player: 'valkyrie', 'tempest', 'phantom'; Rivals: 'solaris', 'crimson', 'titan')
+ * with merged-per-material PBR geometry, procedural panel/carbon micro-detail, layered cockpits,
+ * recessed intakes, multi-stage repulsor pods, and dual-core plasma thrusters.
  */
 export function createHypercarMesh(
   bodyColor: number,
@@ -27,7 +186,8 @@ export function createHypercarMesh(
   shadowTexture: THREE.Texture,
   castShadow: boolean,
   chassisStyle: ChassisStyle = 'valkyrie',
-  ghostOpacity: number | null = null
+  ghostOpacity: number | null = null,
+  machineTextures?: MachineSurfaceTextures
 ): HypercarModel {
   const isGhost = ghostOpacity !== null;
   const gOpacity = ghostOpacity ?? 1;
@@ -36,7 +196,7 @@ export function createHypercarMesh(
   const root = new THREE.Group();
   const chassisGroup = new THREE.Group();
   // Hover height above track surface (lowest turbine coil at -0.32 -> +0.48m clear above deck)
-  chassisGroup.position.y = 0.80;
+  chassisGroup.position.y = 0.8;
   root.add(chassisGroup);
 
   const geometries: THREE.BufferGeometry[] = [];
@@ -52,6 +212,7 @@ export function createHypercarMesh(
   };
 
   // Distinct PBR materials (or translucent holographic materials when rendered as a ghost)
+  const hasHullMaps = !isGhost && Boolean(machineTextures);
   const hullMat = trackMat(
     isGhost
       ? new THREE.MeshStandardMaterial({
@@ -66,10 +227,19 @@ export function createHypercarMesh(
         })
       : new THREE.MeshPhysicalMaterial({
           color: bodyColor,
-          metalness: chassisStyle === 'tempest' ? 0.65 : 0.85,
-          roughness: chassisStyle === 'tempest' ? 0.34 : 0.18,
+          metalness: chassisStyle === 'tempest' || chassisStyle === 'crimson' ? 0.7 : 0.86,
+          roughness: hasHullMaps
+            ? chassisStyle === 'tempest' || chassisStyle === 'crimson'
+              ? 0.86
+              : 0.7
+            : chassisStyle === 'tempest' || chassisStyle === 'crimson'
+              ? 0.34
+              : 0.18,
+          roughnessMap: machineTextures?.hullPanelRoughness ?? null,
+          bumpMap: machineTextures?.hullPanelBump ?? null,
+          bumpScale: 0.018,
           clearcoat: 1.0,
-          clearcoatRoughness: 0.08,
+          clearcoatRoughness: 0.07,
         })
   );
 
@@ -88,9 +258,12 @@ export function createHypercarMesh(
       : new THREE.MeshPhysicalMaterial({
           color: secondaryColor,
           metalness: 0.78,
-          roughness: 0.26,
-          clearcoat: 0.85,
-          clearcoatRoughness: 0.12,
+          roughness: hasHullMaps ? 0.76 : 0.26,
+          roughnessMap: machineTextures?.hullPanelRoughness ?? null,
+          bumpMap: machineTextures?.hullPanelBump ?? null,
+          bumpScale: 0.014,
+          clearcoat: 0.88,
+          clearcoatRoughness: 0.11,
         })
   );
 
@@ -107,30 +280,12 @@ export function createHypercarMesh(
           depthWrite: false,
         })
       : new THREE.MeshStandardMaterial({
-          color: 0x0f172a,
-          metalness: 0.25,
-          roughness: 0.72,
-        })
-  );
-
-  const canopyMat = trackMat(
-    isGhost
-      ? new THREE.MeshStandardMaterial({
-          color: 0xffffff,
-          emissive: accentColor,
-          emissiveIntensity: 0.6,
-          roughness: 0.2,
-          transparent: true,
-          opacity: gOpacity * 0.65,
-          depthWrite: false,
-        })
-      : new THREE.MeshPhysicalMaterial({
-          color: 0x070d18,
-          metalness: 0.18,
-          roughness: 0.06,
-          clearcoat: 1.0,
-          clearcoatRoughness: 0.04,
-          envMapIntensity: 1.7,
+          color: machineTextures ? 0xdbeafe : 0x0f172a,
+          map: machineTextures?.carbonWeaveAlbedo ?? null,
+          bumpMap: machineTextures?.carbonWeaveBump ?? null,
+          bumpScale: 0.015,
+          metalness: 0.32,
+          roughness: 0.52,
         })
   );
 
@@ -147,10 +302,53 @@ export function createHypercarMesh(
           depthWrite: false,
         })
       : new THREE.MeshPhysicalMaterial({
-          color: 0x94a3b8,
+          color: 0xaab7c8,
           metalness: 0.92,
           roughness: 0.28,
-          anisotropy: 0.7,
+          bumpMap: machineTextures?.titaniumBrushedBump ?? null,
+          bumpScale: 0.01,
+          anisotropy: 0.75,
+        })
+  );
+
+  const cockpitInteriorMat = trackMat(
+    isGhost
+      ? new THREE.MeshStandardMaterial({
+          color: accentColor,
+          emissive: accentColor,
+          emissiveIntensity: 0.25,
+          transparent: true,
+          opacity: gOpacity * 0.45,
+          depthWrite: false,
+        })
+      : new THREE.MeshStandardMaterial({
+          color: 0x060911,
+          metalness: 0.2,
+          roughness: 0.88,
+        })
+  );
+
+  const canopyMat = trackMat(
+    isGhost
+      ? new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          emissive: accentColor,
+          emissiveIntensity: 0.6,
+          roughness: 0.2,
+          transparent: true,
+          opacity: gOpacity * 0.65,
+          depthWrite: false,
+        })
+      : new THREE.MeshPhysicalMaterial({
+          color: 0x07111f,
+          metalness: 0.16,
+          roughness: 0.04,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.03,
+          envMapIntensity: 2.0,
+          transparent: true,
+          opacity: 0.84,
+          depthWrite: false,
         })
   );
 
@@ -163,6 +361,18 @@ export function createHypercarMesh(
       metalness: 0.1,
       transparent: isGhost,
       opacity: isGhost ? Math.min(1, gOpacity * 1.45) : 1,
+      depthWrite: !isGhost,
+    })
+  );
+
+  const headlightMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: isGhost ? accentColor : 0xf0f9ff,
+      emissive: isGhost ? accentColor : 0xdbeafe,
+      emissiveIntensity: isGhost ? 1.3 : 2.6,
+      roughness: 0.15,
+      transparent: isGhost,
+      opacity: isGhost ? Math.min(1, gOpacity * 1.3) : 1,
       depthWrite: !isGhost,
     })
   );
@@ -183,419 +393,1582 @@ export function createHypercarMesh(
     new THREE.MeshBasicMaterial({
       color: accentColor,
       transparent: true,
-      opacity: isGhost ? gOpacity * 0.85 : 0.88,
+      opacity: isGhost ? gOpacity * 0.72 : 0.78,
+      blending: isGhost ? THREE.NormalBlending : THREE.AdditiveBlending,
       depthWrite: false,
     })
   );
 
+  const coreFlameMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: isGhost ? accentColor : 0xf8fafc,
+      transparent: true,
+      opacity: isGhost ? gOpacity * 0.85 : 0.92,
+      blending: isGhost ? THREE.NormalBlending : THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+  );
+
+  // Geometry buckets merged per material to minimize draw calls while maximizing silhouette detail
+  const buckets: Record<BucketKey, THREE.BufferGeometry[]> = {
+    hull: [],
+    secondary: [],
+    carbon: [],
+    titanium: [],
+    cockpitInterior: [],
+    canopy: [],
+    accentGlow: [],
+    headlight: [],
+    tailLight: [],
+  };
+
+  const _mat4 = new THREE.Matrix4();
+  const _pos = new THREE.Vector3();
+  const _euler = new THREE.Euler();
+  const _quat = new THREE.Quaternion();
+  const _scale = new THREE.Vector3();
+
+  const defaultUvScale: Record<BucketKey, number> = {
+    hull: 0.42,
+    secondary: 0.45,
+    carbon: 1.85,
+    titanium: 0.85,
+    cockpitInterior: 0.5,
+    canopy: 0.5,
+    accentGlow: 0.5,
+    headlight: 0.5,
+    tailLight: 0.5,
+  };
+
+  const addPart = (
+    bucket: BucketKey,
+    srcGeo: THREE.BufferGeometry,
+    px = 0,
+    py = 0,
+    pz = 0,
+    rx = 0,
+    ry = 0,
+    rz = 0,
+    sx = 1,
+    sy = 1,
+    sz = 1,
+    uvMode: 'box' | 'keep' = 'box'
+  ) => {
+    const g = srcGeo.index ? srcGeo.toNonIndexed() : srcGeo.clone();
+    _pos.set(px, py, pz);
+    _euler.set(rx, ry, rz);
+    _quat.setFromEuler(_euler);
+    _scale.set(sx, sy, sz);
+    _mat4.compose(_pos, _quat, _scale);
+    g.applyMatrix4(_mat4);
+
+    if (!g.attributes.normal) {
+      g.computeVertexNormals();
+    }
+    for (const attrName of Object.keys(g.attributes)) {
+      if (attrName !== 'position' && attrName !== 'normal' && attrName !== 'uv') {
+        g.deleteAttribute(attrName);
+      }
+    }
+    if (!g.attributes.uv || uvMode === 'box') {
+      applyBoxUVs(g, defaultUvScale[bucket]);
+    }
+    buckets[bucket].push(g);
+  };
+
   const thrusterFlames: THREE.Mesh[] = [];
 
-  // Shared turbine nacelle LatheGeometry
-  const podPoints = [
-    new THREE.Vector2(0.0, -0.14),
-    new THREE.Vector2(0.32, -0.14),
-    new THREE.Vector2(0.42, -0.02),
-    new THREE.Vector2(0.38, 0.14),
-    new THREE.Vector2(0.24, 0.18),
-    new THREE.Vector2(0.0, 0.18),
-  ];
-  const podGeo = trackGeo(new THREE.LatheGeometry(podPoints, 18));
-  const coilGeo = trackGeo(new THREE.TorusGeometry(0.29, 0.038, 10, 24));
-  coilGeo.rotateX(Math.PI / 2);
+  // Shared multi-stage turbine levitation pod geometries (disposed after bucketing)
+  const podHousingGeo = new THREE.LatheGeometry(
+    [
+      new THREE.Vector2(0.0, -0.15),
+      new THREE.Vector2(0.28, -0.15),
+      new THREE.Vector2(0.39, -0.07),
+      new THREE.Vector2(0.45, -0.01),
+      new THREE.Vector2(0.45, 0.05),
+      new THREE.Vector2(0.39, 0.07),
+      new THREE.Vector2(0.41, 0.13),
+      new THREE.Vector2(0.33, 0.18),
+      new THREE.Vector2(0.2, 0.2),
+      new THREE.Vector2(0.0, 0.2),
+    ],
+    22
+  );
+  const podStatorRingGeo = new THREE.TorusGeometry(0.34, 0.036, 8, 24);
+  podStatorRingGeo.rotateX(Math.PI / 2);
+  const podOuterCoilGeo = new THREE.TorusGeometry(0.27, 0.036, 10, 24);
+  podOuterCoilGeo.rotateX(Math.PI / 2);
+  const podInnerCoreGeo = new THREE.CylinderGeometry(0.14, 0.16, 0.05, 16);
+
+  const addTurbinePod = (px: number, pz: number, py = -0.16, scale = 1.0) => {
+    addPart('titanium', podHousingGeo, px, py, pz, 0, 0, 0, scale, scale, scale, 'keep');
+    addPart('carbon', podStatorRingGeo, px, py - 0.07 * scale, pz, 0, 0, 0, scale, scale, scale, 'box');
+    addPart('accentGlow', podOuterCoilGeo, px, py - 0.12 * scale, pz, 0, 0, 0, scale, scale, scale, 'box');
+    addPart('accentGlow', podInnerCoreGeo, px, py - 0.125 * scale, pz, 0, 0, 0, scale, scale, scale, 'box');
+  };
+
+  // Shared multi-stage afterburner nozzle helper
+  const addAfterburner = (
+    tx: number,
+    ty: number,
+    tz: number,
+    nozzleRadius: number,
+    nozzleLen: number,
+    flameRadius: number,
+    flameLen: number,
+    flameGeo: THREE.BufferGeometry,
+    coreFlameGeo: THREE.BufferGeometry
+  ) => {
+    const outerNozzleGeo = new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(nozzleRadius * 0.72, -nozzleLen * 0.5),
+        new THREE.Vector2(nozzleRadius * 0.92, -nozzleLen * 0.45),
+        new THREE.Vector2(nozzleRadius * 1.04, -nozzleLen * 0.1),
+        new THREE.Vector2(nozzleRadius * 0.96, nozzleLen * 0.15),
+        new THREE.Vector2(nozzleRadius * 1.02, nozzleLen * 0.35),
+        new THREE.Vector2(nozzleRadius * 0.86, nozzleLen * 0.5),
+        new THREE.Vector2(nozzleRadius * 0.68, nozzleLen * 0.5),
+      ],
+      20
+    );
+    outerNozzleGeo.rotateX(Math.PI / 2);
+
+    const innerLinerGeo = new THREE.CylinderGeometry(nozzleRadius * 0.74, nozzleRadius * 0.66, nozzleLen * 0.88, 16, 1, true);
+    innerLinerGeo.rotateX(Math.PI / 2);
+
+    const coreDiskGeo = new THREE.CylinderGeometry(nozzleRadius * 0.56, nozzleRadius * 0.56, 0.06, 16);
+    coreDiskGeo.rotateX(Math.PI / 2);
+
+    const petalRingGeo = new THREE.TorusGeometry(nozzleRadius * 0.88, 0.025, 8, 12);
+
+    addPart('titanium', outerNozzleGeo, tx, ty, tz, 0, 0, 0, 1, 1, 1, 'keep');
+    addPart('carbon', innerLinerGeo, tx, ty, tz - nozzleLen * 0.05, 0, 0, 0, 1, 1, 1, 'box');
+    addPart('carbon', petalRingGeo, tx, ty, tz - nozzleLen * 0.46, 0, 0, 0, 1, 1, 1, 'box');
+    addPart('accentGlow', coreDiskGeo, tx, ty, tz - nozzleLen * 0.18, 0, 0, 0, 1, 1, 1, 'box');
+
+    outerNozzleGeo.dispose();
+    innerLinerGeo.dispose();
+    coreDiskGeo.dispose();
+    petalRingGeo.dispose();
+
+    const flame = new THREE.Mesh(flameGeo, flameMat);
+    flame.position.set(tx, ty, tz - nozzleLen * 0.48);
+    const innerCore = new THREE.Mesh(coreFlameGeo, coreFlameMat);
+    innerCore.scale.set(0.52 * (flameRadius > 0 ? 1 : 1), 0.52, 0.74 * (flameLen > 0 ? 1 : 1));
+    flame.add(innerCore);
+    chassisGroup.add(flame);
+    thrusterFlames.push(flame);
+  };
 
   if (chassisStyle === 'tempest') {
-    // === TEMPEST-R: Twin-Prong Spearhead Interceptor + Delta Wings + Dorsal Shark Fin ===
-    const coreShape = new THREE.Shape();
-    coreShape.moveTo(-2.55, -0.14);
-    coreShape.lineTo(1.25, -0.14);
-    coreShape.lineTo(1.85, 0.02);
-    coreShape.lineTo(0.85, 0.34);
-    coreShape.lineTo(-1.1, 0.44);
-    coreShape.lineTo(-2.55, 0.24);
-    coreShape.closePath();
-
-    const coreGeo = trackGeo(
-      new THREE.ExtrudeGeometry(coreShape, {
-        depth: 1.05,
-        bevelEnabled: true,
-        bevelThickness: 0.1,
-        bevelSize: 0.08,
-        bevelSegments: 3,
-      })
+    // =========================================================================
+    // TEMPEST-R: Twin-Prong Needle Spearhead + Razor Delta Wings + Dorsal Fin
+    // =========================================================================
+    const coreGeo = makeCenteredExtrude(
+      [
+        [-2.58, -0.14],
+        [1.35, -0.14],
+        [2.05, 0.03],
+        [1.1, 0.31],
+        [-0.35, 0.45],
+        [-1.35, 0.44],
+        [-2.58, 0.22],
+      ],
+      1.02,
+      0.11,
+      0.08,
+      3
     );
-    coreGeo.translate(0, 0, -0.525);
-    coreGeo.rotateY(-Math.PI / 2);
-    coreGeo.computeVertexNormals();
-    const coreMesh = new THREE.Mesh(coreGeo, hullMat);
-    coreMesh.castShadow = effectiveCastShadow;
-    coreMesh.receiveShadow = true;
-    chassisGroup.add(coreMesh);
+    addPart('hull', coreGeo, 0, 0, 0);
+    coreGeo.dispose();
 
-    // Twin protruding needle-spear prongs + copper intake cowls
-    const prongGeo = trackGeo(new THREE.BoxGeometry(0.34, 0.22, 2.35));
-    const prongTipGeo = trackGeo(new THREE.ConeGeometry(0.19, 0.72, 4));
+    // Sculpted center needle nose splitter bridge & carbon venturi undertray
+    const undertrayGeo = new THREE.BoxGeometry(1.42, 0.12, 4.35);
+    addPart('carbon', undertrayGeo, 0, -0.15, -0.32);
+    undertrayGeo.dispose();
+
+    const frontSplitterGeo = makeCenteredExtrude(
+      [
+        [1.15, -0.18],
+        [2.48, -0.17],
+        [2.58, -0.11],
+        [1.25, -0.1],
+      ],
+      1.26,
+      0.02,
+      0.02,
+      1
+    );
+    addPart('carbon', frontSplitterGeo, 0, 0, 0);
+    frontSplitterGeo.dispose();
+
+    // Central nose aero crest & twin-fang DRL headlights
+    const noseCrestGeo = makeCenteredExtrude(
+      [
+        [0.95, 0.25],
+        [2.12, 0.04],
+        [1.75, 0.16],
+        [0.95, 0.34],
+      ],
+      0.24,
+      0.03,
+      0.03,
+      2
+    );
+    addPart('secondary', noseCrestGeo, 0, 0, 0);
+    noseCrestGeo.dispose();
+
+    const drlFangGeo = new THREE.BoxGeometry(0.14, 0.045, 0.56);
+    [-0.38, 0.38].forEach((dx) => {
+      addPart('headlight', drlFangGeo, dx, 0.07, 1.72, 0.14, dx > 0 ? -0.18 : 0.18, 0);
+    });
+    drlFangGeo.dispose();
+
+    // Sculpted Twin Protruding Spearhead Sponsons + Recessed Ram-Air Intakes
+    const prongGeo = makeCenteredExtrude(
+      [
+        [0.25, -0.14],
+        [2.72, -0.09],
+        [3.12, -0.01],
+        [2.45, 0.11],
+        [0.35, 0.17],
+      ],
+      0.32,
+      0.04,
+      0.035,
+      2
+    );
+    const prongTipGeo = new THREE.ConeGeometry(0.16, 0.78, 4);
     prongTipGeo.rotateX(Math.PI / 2);
     prongTipGeo.rotateZ(Math.PI / 4);
+    const prongRidgeGeo = new THREE.BoxGeometry(0.06, 0.04, 2.38);
+    const intakeRecessGeo = new THREE.BoxGeometry(0.24, 0.16, 0.45);
+    const intakeVaneGeo = new THREE.BoxGeometry(0.2, 0.025, 0.26);
+    const prongFlankCowlGeo = new THREE.BoxGeometry(0.12, 0.14, 1.75);
 
-    [-0.64, 0.64].forEach((px) => {
-      const prong = new THREE.Mesh(prongGeo, secondaryMat);
-      prong.position.set(px, -0.02, 1.55);
-      prong.castShadow = effectiveCastShadow;
-      chassisGroup.add(prong);
-
-      const tip = new THREE.Mesh(prongTipGeo, hullMat);
-      tip.position.set(px, -0.02, 2.95);
-      chassisGroup.add(tip);
-
-      const stripeGeo = trackGeo(new THREE.BoxGeometry(0.06, 0.04, 2.2));
-      const stripe = new THREE.Mesh(stripeGeo, accentGlowMat);
-      stripe.position.set(px, 0.11, 1.5);
-      chassisGroup.add(stripe);
-    });
-
-    // Swept-back Delta Wings
-    const wingGeo = trackGeo(new THREE.BoxGeometry(1.38, 0.08, 1.45));
     [-1, 1].forEach((side) => {
-      const wing = new THREE.Mesh(wingGeo, hullMat);
-      wing.position.set(side * 1.12, 0.06, -1.05);
-      wing.rotation.y = side * -0.44;
-      wing.castShadow = effectiveCastShadow;
-      chassisGroup.add(wing);
-
-      const wingEdgeGeo = trackGeo(new THREE.BoxGeometry(1.35, 0.04, 0.1));
-      const edge = new THREE.Mesh(wingEdgeGeo, accentGlowMat);
-      edge.position.set(side * 1.15, 0.07, -0.35);
-      edge.rotation.y = side * -0.44;
-      chassisGroup.add(edge);
+      const px = side * 0.66;
+      addPart('secondary', prongGeo, px, 0, 0);
+      addPart('hull', prongTipGeo, px, -0.01, 3.16);
+      addPart('accentGlow', prongRidgeGeo, px, 0.16, 1.56, -0.03, 0, 0);
+      // Recessed dark carbon ram-air throat + titanium vane inside prong root
+      addPart('carbon', intakeRecessGeo, side * 0.56, 0.01, 0.55);
+      addPart('titanium', intakeVaneGeo, side * 0.56, 0.01, 0.62);
+      addPart('carbon', prongFlankCowlGeo, side * 0.85, -0.02, 1.32);
     });
+    prongGeo.dispose();
+    prongTipGeo.dispose();
+    prongRidgeGeo.dispose();
+    intakeRecessGeo.dispose();
+    intakeVaneGeo.dispose();
+    prongFlankCowlGeo.dispose();
 
-    // Low-drag Canopy
-    const canopyGeo = trackGeo(new THREE.CapsuleGeometry(0.38, 1.1, 6, 14));
+    // Swept Razor Delta Wings + Copper Root Fairings + Downward Wingtip Stabilizers
+    const wingletGeo = new THREE.BoxGeometry(0.065, 0.36, 0.72);
+    const wingEdgeGeo = new THREE.BoxGeometry(1.52, 0.035, 0.085);
+    const wingFlapGeo = new THREE.BoxGeometry(1.18, 0.04, 0.22);
+    const rootFairingGeo = new THREE.BoxGeometry(0.46, 0.14, 1.68);
+
+    [-1, 1].forEach((side) => {
+      const deltaWingGeo = createSweptWingGeometry({
+        side: side as -1 | 1,
+        rootX: 0.52,
+        tipX: 1.98,
+        rootZFront: -0.1,
+        rootZBack: -2.05,
+        tipZFront: -1.38,
+        tipZBack: -2.22,
+        rootY: 0.07,
+        tipY: 0.01,
+        rootThick: 0.15,
+        tipThick: 0.055,
+      });
+      addPart('hull', deltaWingGeo);
+      deltaWingGeo.dispose();
+
+      // Copper-bronze root fairing & carbon trailing elevon
+      addPart('secondary', rootFairingGeo, side * 0.68, 0.09, -1.08, 0, side * -0.12, 0);
+      addPart('carbon', wingFlapGeo, side * 1.24, 0.04, -2.04, 0, side * -0.14, 0);
+      // Amber leading-edge plasma rail
+      addPart('accentGlow', wingEdgeGeo, side * 1.25, 0.055, -0.74, 0, side * -0.71, side * -0.04);
+      // Downward-canted wingtip fin
+      addPart('carbon', wingletGeo, side * 1.98, -0.08, -1.82, 0.15, 0, side * 0.24);
+    });
+    wingletGeo.dispose();
+    wingEdgeGeo.dispose();
+    wingFlapGeo.dispose();
+    rootFairingGeo.dispose();
+
+    // Low-Drag Teardrop Cockpit (Interior Tub + Amber HUD Arc + Roll Hoop + Tinted Canopy)
+    const tubGeo = new THREE.BoxGeometry(0.68, 0.16, 1.48);
+    addPart('cockpitInterior', tubGeo, 0, 0.34, 0.05);
+    tubGeo.dispose();
+
+    const rollHoopGeo = new THREE.TorusGeometry(0.28, 0.036, 8, 16, Math.PI);
+    addPart('titanium', rollHoopGeo, 0, 0.42, -0.38);
+    rollHoopGeo.dispose();
+
+    const hudBarGeo = new THREE.BoxGeometry(0.42, 0.03, 0.04);
+    addPart('accentGlow', hudBarGeo, 0, 0.43, 0.62, -0.35, 0, 0);
+    hudBarGeo.dispose();
+
+    const canopyGeo = new THREE.CapsuleGeometry(0.4, 1.15, 8, 18);
     canopyGeo.rotateX(Math.PI / 2);
-    canopyGeo.scale(1.0, 0.68, 1.0);
-    const canopy = new THREE.Mesh(canopyGeo, canopyMat);
-    canopy.position.set(0, 0.42, 0.1);
-    chassisGroup.add(canopy);
+    canopyGeo.scale(1.02, 0.68, 1.0);
+    addPart('canopy', canopyGeo, 0, 0.43, 0.08, 0, 0, 0, 1, 1, 1, 'box');
+    canopyGeo.dispose();
 
-    // Tall Central Dorsal Shark Fin
-    const finShape = new THREE.Shape();
-    finShape.moveTo(-2.35, 0.28);
-    finShape.lineTo(-0.45, 0.36);
-    finShape.lineTo(-1.85, 0.96);
-    finShape.lineTo(-2.45, 0.88);
-    finShape.closePath();
-    const sharkGeo = trackGeo(
-      new THREE.ExtrudeGeometry(finShape, { depth: 0.08, bevelEnabled: true, bevelSize: 0.02, bevelThickness: 0.02 })
+    const canopyFrameGeo = new THREE.BoxGeometry(0.1, 0.05, 0.92);
+    addPart('carbon', canopyFrameGeo, 0, 0.61, -0.22, -0.14, 0, 0);
+    canopyFrameGeo.dispose();
+
+    // Tall Dorsal Shark Fin + Turbo Intake Scoop + Carbon Rudder Edge
+    const finGeo = makeCenteredExtrude(
+      [
+        [-2.42, 0.28],
+        [-0.45, 0.36],
+        [-1.82, 0.98],
+        [-2.48, 0.9],
+      ],
+      0.08,
+      0.025,
+      0.02,
+      2
     );
-    sharkGeo.translate(0, 0, -0.04);
-    sharkGeo.rotateY(-Math.PI / 2);
-    const sharkFin = new THREE.Mesh(sharkGeo, secondaryMat);
-    sharkFin.castShadow = effectiveCastShadow;
-    chassisGroup.add(sharkFin);
+    addPart('secondary', finGeo);
+    finGeo.dispose();
 
-    // 4 Turbine Pods
+    const finCarbonEdge = makeCenteredExtrude(
+      [
+        [-2.52, 0.3],
+        [-2.35, 0.3],
+        [-2.42, 0.91],
+        [-2.58, 0.89],
+      ],
+      0.05,
+      0.015,
+      0.015,
+      1
+    );
+    addPart('carbon', finCarbonEdge);
+    finCarbonEdge.dispose();
+
+    const dorsalSpineGlow = new THREE.BoxGeometry(0.055, 0.045, 1.38);
+    addPart('accentGlow', dorsalSpineGlow, 0, 0.69, -1.16, 0.39, 0, 0);
+    dorsalSpineGlow.dispose();
+
+    const turboScoopGeo = new THREE.BoxGeometry(0.32, 0.16, 0.56);
+    addPart('carbon', turboScoopGeo, 0, 0.53, -0.68);
+    turboScoopGeo.dispose();
+
+    // 4 Repulsor Turbine Pods
     [
       [-0.86, 1.45],
       [0.86, 1.45],
       [-1.36, -1.45],
       [1.36, -1.45],
-    ].forEach(([px, pz]) => {
-      const pod = new THREE.Mesh(podGeo, brushedTitaniumMat);
-      pod.position.set(px, -0.16, pz);
-      chassisGroup.add(pod);
-      const coil = new THREE.Mesh(coilGeo, accentGlowMat);
-      coil.position.set(px, -0.28, pz);
-      chassisGroup.add(coil);
-    });
+    ].forEach(([px, pz]) => addTurbinePod(px, pz, -0.16, 1.0));
 
-    // Oversized Dual Afterburners
-    const nozzleGeo = trackGeo(new THREE.CylinderGeometry(0.24, 0.31, 0.42, 16));
-    nozzleGeo.rotateX(Math.PI / 2);
-    const flameGeo = trackGeo(new THREE.ConeGeometry(0.22, 1.4, 14));
+    // Heavy Rear Diffuser Strakes + Segmented Taillights
+    const diffuserDeckGeo = new THREE.BoxGeometry(1.52, 0.08, 0.52);
+    addPart('carbon', diffuserDeckGeo, 0, -0.13, -2.48, 0.16, 0, 0);
+    diffuserDeckGeo.dispose();
+    const strakeGeo = new THREE.BoxGeometry(0.04, 0.18, 0.48);
+    [-0.56, -0.2, 0.2, 0.56].forEach((sx) => addPart('carbon', strakeGeo, sx, -0.09, -2.52));
+    strakeGeo.dispose();
+
+    const tailBarCenter = new THREE.BoxGeometry(0.36, 0.075, 0.08);
+    const tailBladeGeo = new THREE.BoxGeometry(0.58, 0.07, 0.08);
+    addPart('tailLight', tailBarCenter, 0, 0.22, -2.63);
+    [-0.56, 0.56].forEach((tx) => addPart('tailLight', tailBladeGeo, tx, 0.24, -2.62, 0, 0, tx > 0 ? 0.1 : -0.1));
+    tailBarCenter.dispose();
+    tailBladeGeo.dispose();
+
+    // Oversized Dual Mega-Afterburners
+    const flameGeo = trackGeo(new THREE.ConeGeometry(0.24, 1.55, 16));
     flameGeo.rotateX(-Math.PI / 2);
-    flameGeo.translate(0, 0, -0.7);
-    [-0.46, 0.46].forEach((tx) => {
-      const nozzle = new THREE.Mesh(nozzleGeo, brushedTitaniumMat);
-      nozzle.position.set(tx, 0.06, -2.58);
-      chassisGroup.add(nozzle);
-      const flame = new THREE.Mesh(flameGeo, flameMat);
-      flame.position.set(tx, 0.06, -2.76);
-      chassisGroup.add(flame);
-      thrusterFlames.push(flame);
-    });
+    flameGeo.translate(0, 0, -0.775);
+    const coreFlameGeo = trackGeo(new THREE.ConeGeometry(0.22, 1.5, 12));
+    coreFlameGeo.rotateX(-Math.PI / 2);
+    coreFlameGeo.translate(0, 0, -0.75);
 
-    const tailBar = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.4, 0.08, 0.08)), tailLightMat);
-    tailBar.position.set(0, 0.22, -2.6);
-    chassisGroup.add(tailBar);
+    [-0.46, 0.46].forEach((tx) => addAfterburner(tx, 0.06, -2.58, 0.3, 0.48, 0.24, 1.55, flameGeo, coreFlameGeo));
   } else if (chassisStyle === 'phantom') {
-    // === PHANTOM-V: Forward-Swept Stealth Wings + Dorsal Sensor Pod + Triple Thrusters ===
-    const hullShape = new THREE.Shape();
-    hullShape.moveTo(-2.1, -0.14);
-    hullShape.lineTo(1.4, -0.14);
-    hullShape.lineTo(2.15, 0.08);
-    hullShape.lineTo(1.1, 0.38);
-    hullShape.lineTo(-0.35, 0.48);
-    hullShape.lineTo(-2.1, 0.3);
-    hullShape.closePath();
-
-    const hullGeo = trackGeo(
-      new THREE.ExtrudeGeometry(hullShape, {
-        depth: 1.38,
-        bevelEnabled: true,
-        bevelThickness: 0.12,
-        bevelSize: 0.08,
-        bevelSegments: 3,
-      })
+    // =========================================================================
+    // PHANTOM-V: Stealth Forward-Swept Fighter + Sensor Pod + Triple Vectoring
+    // =========================================================================
+    const hullGeo = makeCenteredExtrude(
+      [
+        [-2.14, -0.14],
+        [1.45, -0.14],
+        [2.26, 0.06],
+        [1.22, 0.34],
+        [-0.32, 0.48],
+        [-2.14, 0.28],
+      ],
+      1.32,
+      0.12,
+      0.08,
+      3
     );
-    hullGeo.translate(0, 0, -0.69);
-    hullGeo.rotateY(-Math.PI / 2);
-    hullGeo.computeVertexNormals();
-    const hullMesh = new THREE.Mesh(hullGeo, hullMat);
-    hullMesh.castShadow = effectiveCastShadow;
-    hullMesh.receiveShadow = true;
-    chassisGroup.add(hullMesh);
+    addPart('hull', hullGeo);
+    hullGeo.dispose();
 
-    // Armored White Secondary Shoulder Cowls
-    const cowlGeo = trackGeo(new THREE.BoxGeometry(0.42, 0.22, 2.5));
-    [-0.78, 0.78].forEach((cx) => {
-      const cowl = new THREE.Mesh(cowlGeo, secondaryMat);
-      cowl.position.set(cx, 0.24, -0.25);
-      cowl.castShadow = effectiveCastShadow;
-      chassisGroup.add(cowl);
+    // Front Carbon Chin Splitter & Nose Stealth Spine
+    const chinGeo = makeCenteredExtrude(
+      [
+        [1.1, -0.18],
+        [2.32, -0.15],
+        [2.36, -0.09],
+        [1.1, -0.11],
+      ],
+      1.38,
+      0.025,
+      0.02,
+      2
+    );
+    addPart('carbon', chinGeo);
+    chinGeo.dispose();
+
+    const undertrayGeo = new THREE.BoxGeometry(1.64, 0.11, 3.85);
+    addPart('carbon', undertrayGeo, 0, -0.15, -0.15);
+    undertrayGeo.dispose();
+
+    // Nose Ice-White Cheek DRL Blades + Center Vent Glow
+    const noseDrlGeo = new THREE.BoxGeometry(0.36, 0.045, 0.14);
+    [-0.46, 0.46].forEach((dx) => {
+      addPart('headlight', noseDrlGeo, dx, 0.1, 2.02, 0.12, dx > 0 ? -0.34 : 0.34, dx > 0 ? -0.1 : 0.1);
     });
+    noseDrlGeo.dispose();
+    const noseCoreSlit = new THREE.BoxGeometry(0.42, 0.04, 0.08);
+    addPart('accentGlow', noseCoreSlit, 0, 0.01, 2.26);
+    noseCoreSlit.dispose();
 
-    // Armored Canopy
-    const canopyGeo = trackGeo(new THREE.BoxGeometry(0.92, 0.34, 1.65));
-    const canopy = new THREE.Mesh(canopyGeo, canopyMat);
-    canopy.position.set(0, 0.48, 0.15);
-    canopy.rotation.x = 0.08;
-    chassisGroup.add(canopy);
-
-    // Dorsal Tactical Item-Launcher / Sensor Pod
-    const podHousing = new THREE.Mesh(
-      trackGeo(new THREE.BoxGeometry(0.54, 0.22, 0.92)),
-      carbonMat
+    // Sculpted Pearl-White Armored Shoulder Cowls + Recessed Side Intake Ducts
+    const cowlGeo = makeCenteredExtrude(
+      [
+        [-1.55, 0.08],
+        [0.95, 0.1],
+        [1.18, 0.22],
+        [0.65, 0.35],
+        [-1.45, 0.33],
+      ],
+      0.38,
+      0.04,
+      0.03,
+      2
     );
-    podHousing.position.set(0, 0.64, -1.05);
-    chassisGroup.add(podHousing);
-    const sensorRing = new THREE.Mesh(
-      trackGeo(new THREE.TorusGeometry(0.18, 0.04, 8, 18)),
-      accentGlowMat
-    );
-    sensorRing.position.set(0, 0.72, -0.6);
-    chassisGroup.add(sensorRing);
+    const intakeThroatGeo = new THREE.BoxGeometry(0.28, 0.16, 0.38);
+    const intakeSplitterGeo = new THREE.BoxGeometry(0.24, 0.025, 0.28);
+    const sideCoolingGlow = new THREE.BoxGeometry(0.05, 0.04, 1.35);
 
-    // Forward-Swept Outer Stealth Wings (+0.38 rad forward sweep!)
-    const fWingGeo = trackGeo(new THREE.BoxGeometry(1.25, 0.08, 0.72));
-    const tipPodGeo = trackGeo(new THREE.CylinderGeometry(0.1, 0.12, 1.35, 10));
-    tipPodGeo.rotateX(Math.PI / 2);
+    [-0.79, 0.79].forEach((cx) => {
+      addPart('secondary', cowlGeo, cx, 0, 0);
+      addPart('carbon', intakeThroatGeo, cx, 0.21, 1.05);
+      addPart('titanium', intakeSplitterGeo, cx, 0.21, 1.08);
+      addPart('accentGlow', sideCoolingGlow, cx + (cx > 0 ? 0.19 : -0.19), 0.22, -0.2);
+    });
+    cowlGeo.dispose();
+    intakeThroatGeo.dispose();
+    intakeSplitterGeo.dispose();
+    sideCoolingGlow.dispose();
+
+    // Faceted Stealth Cockpit (Interior Tub + Cyan Holo HUD + Roll Hoop + Beveled Glass Prism)
+    const tubGeo = new THREE.BoxGeometry(0.76, 0.16, 1.52);
+    addPart('cockpitInterior', tubGeo, 0, 0.36, 0.12);
+    tubGeo.dispose();
+
+    const rollArchGeo = new THREE.TorusGeometry(0.32, 0.038, 8, 16, Math.PI);
+    addPart('titanium', rollArchGeo, 0, 0.44, -0.35);
+    rollArchGeo.dispose();
+
+    const hudArcGeo = new THREE.BoxGeometry(0.48, 0.032, 0.045);
+    addPart('accentGlow', hudArcGeo, 0, 0.46, 0.72, -0.32, 0, 0);
+    hudArcGeo.dispose();
+
+    const stealthCanopyGeo = makeCenteredExtrude(
+      [
+        [-0.78, 0.32],
+        [1.06, 0.32],
+        [0.52, 0.64],
+        [-0.36, 0.68],
+      ],
+      0.78,
+      0.07,
+      0.06,
+      2
+    );
+    addPart('canopy', stealthCanopyGeo, 0, 0, 0.04);
+    stealthCanopyGeo.dispose();
+
+    // Armored Canopy Spine Frame & Cheek Struts
+    const canopyRibGeo = new THREE.BoxGeometry(0.11, 0.055, 0.98);
+    addPart('secondary', canopyRibGeo, 0, 0.69, -0.18, -0.06, 0, 0);
+    canopyRibGeo.dispose();
+
+    // Multi-Tiered Dorsal Tactical Sensor & Item-Launcher Module
+    const podBaseGeo = makeCenteredExtrude(
+      [
+        [-1.65, 0.44],
+        [-0.55, 0.46],
+        [-0.72, 0.68],
+        [-1.52, 0.68],
+      ],
+      0.56,
+      0.04,
+      0.03,
+      2
+    );
+    addPart('carbon', podBaseGeo);
+    podBaseGeo.dispose();
+
+    const sensorRingGeo = new THREE.TorusGeometry(0.17, 0.038, 10, 20);
+    addPart('accentGlow', sensorRingGeo, 0, 0.66, -0.58);
+    sensorRingGeo.dispose();
+    const sensorOpticGeo = new THREE.CylinderGeometry(0.1, 0.11, 0.06, 16);
+    sensorOpticGeo.rotateX(Math.PI / 2);
+    addPart('headlight', sensorOpticGeo, 0, 0.66, -0.59);
+    sensorOpticGeo.dispose();
+
+    const microFinGeo = new THREE.BoxGeometry(0.04, 0.18, 0.46);
+    [-0.24, 0.24].forEach((mx) => addPart('titanium', microFinGeo, mx, 0.72, -1.16, 0, 0, mx > 0 ? -0.25 : 0.25));
+    microFinGeo.dispose();
+
+    // Forward-Swept Stealth Airfoil Wings + Wingtip ECM/Stabilizer Pods
+    const tipPodBodyGeo = new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0.0, -0.78),
+        new THREE.Vector2(0.07, -0.72),
+        new THREE.Vector2(0.11, -0.35),
+        new THREE.Vector2(0.115, 0.38),
+        new THREE.Vector2(0.08, 0.68),
+        new THREE.Vector2(0.0, 0.84),
+      ],
+      14
+    );
+    tipPodBodyGeo.rotateX(Math.PI / 2);
+    const tipPodRingGeo = new THREE.TorusGeometry(0.115, 0.022, 8, 16);
+    const wingLeadRailGeo = new THREE.BoxGeometry(1.26, 0.035, 0.075);
+    const wingAftFlapGeo = new THREE.BoxGeometry(1.1, 0.035, 0.18);
+    const tipFinGeo = new THREE.BoxGeometry(0.045, 0.24, 0.56);
+
     [-1, 1].forEach((side) => {
-      const fWing = new THREE.Mesh(fWingGeo, secondaryMat);
-      fWing.position.set(side * 1.28, 0.08, 0.15);
-      fWing.rotation.y = side * 0.38;
-      fWing.castShadow = effectiveCastShadow;
-      chassisGroup.add(fWing);
+      const fWingGeo = createSweptWingGeometry({
+        side: side as -1 | 1,
+        rootX: 0.72,
+        tipX: 1.88,
+        rootZFront: 0.24,
+        rootZBack: -0.64,
+        tipZFront: 0.88,
+        tipZBack: 0.12,
+        rootY: 0.09,
+        tipY: 0.14,
+        rootThick: 0.13,
+        tipThick: 0.065,
+      });
+      addPart('secondary', fWingGeo);
+      fWingGeo.dispose();
 
-      const tipPod = new THREE.Mesh(tipPodGeo, hullMat);
-      tipPod.position.set(side * 1.82, 0.08, 0.48);
-      chassisGroup.add(tipPod);
+      addPart('accentGlow', wingLeadRailGeo, side * 1.3, 0.12, 0.56, 0, side * 0.49, side * 0.04);
+      addPart('carbon', wingAftFlapGeo, side * 1.28, 0.09, -0.26, 0, side * 0.56, side * 0.04);
 
-      const blade = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.18, 0.04, 0.08)), accentGlowMat);
-      blade.position.set(side * 1.28, 0.11, 0.52);
-      blade.rotation.y = side * 0.38;
-      chassisGroup.add(blade);
+      // Sleek tapered wingtip ECM pod + cyan glow ring + outward carbon winglet
+      addPart('hull', tipPodBodyGeo, side * 1.9, 0.14, 0.52, 0, 0, 0, 1, 1, 1, 'keep');
+      addPart('accentGlow', tipPodRingGeo, side * 1.9, 0.14, 1.06);
+      addPart('carbon', tipFinGeo, side * 1.96, 0.24, 0.28, -0.15, 0, side * -0.28);
     });
+    tipPodBodyGeo.dispose();
+    tipPodRingGeo.dispose();
+    wingLeadRailGeo.dispose();
+    wingAftFlapGeo.dispose();
+    tipFinGeo.dispose();
 
-    // Outward-Canted V-Tail Stabilizers
-    const vTailGeo = trackGeo(new THREE.BoxGeometry(0.1, 0.74, 0.95));
+    // Swept Canted V-Tail Twin Stabilizers
+    const vTailBodyGeo = makeCenteredExtrude(
+      [
+        [-2.22, 0.0],
+        [-1.36, 0.0],
+        [-1.92, 0.78],
+        [-2.34, 0.74],
+      ],
+      0.085,
+      0.02,
+      0.02,
+      2
+    );
+    const vTailTrimGeo = new THREE.BoxGeometry(0.04, 0.66, 0.06);
     [-1, 1].forEach((side) => {
-      const vTail = new THREE.Mesh(vTailGeo, hullMat);
-      vTail.position.set(side * 0.78, 0.62, -1.78);
-      vTail.rotation.z = side * -0.48;
-      vTail.castShadow = effectiveCastShadow;
-      chassisGroup.add(vTail);
+      addPart('hull', vTailBodyGeo, side * 0.72, 0.24, 0, 0, 0, side * -0.46);
+      addPart('accentGlow', vTailTrimGeo, side * 0.9, 0.58, -1.78, -0.48, 0, side * -0.46);
     });
+    vTailBodyGeo.dispose();
+    vTailTrimGeo.dispose();
 
-    // 4 Turbine Pods
+    // 4 Repulsor Turbine Pods
     [
       [-1.38, 0.75],
       [1.38, 0.75],
       [-1.08, -1.4],
       [1.08, -1.4],
-    ].forEach(([px, pz]) => {
-      const pod = new THREE.Mesh(podGeo, brushedTitaniumMat);
-      pod.position.set(px, -0.16, pz);
-      chassisGroup.add(pod);
-      const coil = new THREE.Mesh(coilGeo, accentGlowMat);
-      coil.position.set(px, -0.28, pz);
-      chassisGroup.add(coil);
-    });
+    ].forEach(([px, pz]) => addTurbinePod(px, pz, -0.16, 1.0));
 
-    // Triple-Nozzle Thruster Array
-    const nozzleGeo = trackGeo(new THREE.CylinderGeometry(0.15, 0.2, 0.32, 14));
-    nozzleGeo.rotateX(Math.PI / 2);
-    const flameGeo = trackGeo(new THREE.ConeGeometry(0.14, 1.05, 12));
+    // Carbon Rear Diffuser + Segmented Taillights
+    const diffuserPlateGeo = new THREE.BoxGeometry(1.48, 0.08, 0.45);
+    addPart('carbon', diffuserPlateGeo, 0, -0.13, -2.06, 0.16, 0, 0);
+    diffuserPlateGeo.dispose();
+    const diffStrakeGeo = new THREE.BoxGeometry(0.04, 0.16, 0.42);
+    [-0.5, -0.18, 0.18, 0.5].forEach((sx) => addPart('carbon', diffStrakeGeo, sx, -0.09, -2.1));
+    diffStrakeGeo.dispose();
+
+    const tailBarGeo = new THREE.BoxGeometry(0.56, 0.065, 0.075);
+    [-0.48, 0.48].forEach((tx) => addPart('tailLight', tailBarGeo, tx, 0.26, -2.19, 0, 0, tx > 0 ? -0.08 : 0.08));
+    tailBarGeo.dispose();
+    const centerBeaconGeo = new THREE.BoxGeometry(0.14, 0.08, 0.08);
+    addPart('tailLight', centerBeaconGeo, 0, 0.29, -2.2);
+    centerBeaconGeo.dispose();
+
+    // Triple-Nozzle Vectoring Array
+    const flameGeo = trackGeo(new THREE.ConeGeometry(0.15, 1.15, 14));
     flameGeo.rotateX(-Math.PI / 2);
-    flameGeo.translate(0, 0, -0.525);
+    flameGeo.translate(0, 0, -0.575);
+    const coreFlameGeo = trackGeo(new THREE.ConeGeometry(0.14, 1.1, 10));
+    coreFlameGeo.rotateX(-Math.PI / 2);
+    coreFlameGeo.translate(0, 0, -0.55);
+
     [-0.5, 0, 0.5].forEach((tx, idx) => {
-      const ty = idx === 1 ? 0.16 : 0.05;
-      const nozzle = new THREE.Mesh(nozzleGeo, brushedTitaniumMat);
-      nozzle.position.set(tx, ty, -2.18);
-      chassisGroup.add(nozzle);
-      const flame = new THREE.Mesh(flameGeo, flameMat);
-      flame.position.set(tx, ty, -2.32);
-      chassisGroup.add(flame);
-      thrusterFlames.push(flame);
+      const ty = idx === 1 ? 0.15 : 0.04;
+      addAfterburner(tx, ty, -2.18, 0.19, 0.36, 0.15, 1.15, flameGeo, coreFlameGeo);
     });
-
-    const tailBar = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.48, 0.07, 0.07)), tailLightMat);
-    tailBar.position.set(0, 0.24, -2.18);
-    chassisGroup.add(tailBar);
-  } else {
-    // === VALKYRIE-X: Pearl Titanium + Deep Cobalt GT Flagship Wedge ===
-    const hullShape = new THREE.Shape();
-    hullShape.moveTo(-2.35, -0.14);
-    hullShape.lineTo(1.75, -0.14);
-    hullShape.lineTo(2.45, 0.04);
-    hullShape.lineTo(1.35, 0.28);
-    hullShape.lineTo(0.35, 0.42);
-    hullShape.lineTo(-1.15, 0.45);
-    hullShape.lineTo(-2.35, 0.26);
-    hullShape.closePath();
-
-    const hullGeo = trackGeo(
-      new THREE.ExtrudeGeometry(hullShape, {
-        depth: 1.56,
-        bevelEnabled: true,
-        bevelThickness: 0.12,
-        bevelSize: 0.09,
-        bevelSegments: 3,
-      })
+  } else if (chassisStyle === 'valkyrie') {
+    // =========================================================================
+    // VALKYRIE-X: Pearl Titanium + Deep Cobalt GT Flagship Wedge + Swan-Neck Wing
+    // =========================================================================
+    const hullGeo = makeCenteredExtrude(
+      [
+        [-2.38, -0.14],
+        [1.76, -0.14],
+        [2.52, 0.04],
+        [1.42, 0.27],
+        [0.36, 0.42],
+        [-1.16, 0.45],
+        [-2.38, 0.24],
+      ],
+      1.52,
+      0.12,
+      0.085,
+      3
     );
-    hullGeo.translate(0, 0, -0.78);
-    hullGeo.rotateY(-Math.PI / 2);
-    hullGeo.computeVertexNormals();
+    addPart('hull', hullGeo);
+    hullGeo.dispose();
 
-    const hullMesh = new THREE.Mesh(hullGeo, hullMat);
-    hullMesh.castShadow = effectiveCastShadow;
-    hullMesh.receiveShadow = true;
-    chassisGroup.add(hullMesh);
+    // Full-Length Carbon Venturi Undertray & Stepped Front Aero Splitter
+    const undertrayGeo = new THREE.BoxGeometry(1.94, 0.11, 4.46);
+    addPart('carbon', undertrayGeo, 0, -0.155, -0.05);
+    undertrayGeo.dispose();
 
-    // Cobalt Racing Sidepods + Carbon Undertray
-    const undertray = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.88, 0.14, 4.3)), carbonMat);
-    undertray.position.set(0, -0.15, -0.05);
-    undertray.castShadow = effectiveCastShadow;
-    chassisGroup.add(undertray);
+    const frontSplitterGeo = makeCenteredExtrude(
+      [
+        [1.45, -0.18],
+        [2.64, -0.16],
+        [2.68, -0.1],
+        [1.45, -0.11],
+      ],
+      1.78,
+      0.02,
+      0.02,
+      1
+    );
+    addPart('carbon', frontSplitterGeo);
+    frontSplitterGeo.dispose();
 
-    const sidePodGeo = trackGeo(new THREE.BoxGeometry(0.28, 0.22, 2.7));
-    [-0.92, 0.92].forEach((sx) => {
-      const sp = new THREE.Mesh(sidePodGeo, secondaryMat);
-      sp.position.set(sx, 0.12, -0.35);
-      sp.castShadow = effectiveCastShadow;
-      chassisGroup.add(sp);
+    // Sculpted Front Fender Arches & Recessed Nose Radiator Ducts + Sharp DRL Headlights
+    const noseDuctGeo = new THREE.BoxGeometry(0.38, 0.1, 0.36);
+    const drlBladeGeo = new THREE.BoxGeometry(0.42, 0.04, 0.12);
+    [-0.52, 0.52].forEach((nx) => {
+      addPart('carbon', noseDuctGeo, nx, 0.03, 2.28);
+      addPart('headlight', drlBladeGeo, nx, 0.11, 2.24, 0.16, nx > 0 ? -0.28 : 0.28, nx > 0 ? -0.08 : 0.08);
     });
+    noseDuctGeo.dispose();
+    drlBladeGeo.dispose();
 
-    // Smoked Canopy
-    const canopyShape = new THREE.Shape();
-    canopyShape.moveTo(-1.1, 0.0);
-    canopyShape.lineTo(1.05, 0.0);
-    canopyShape.lineTo(0.45, 0.34);
-    canopyShape.lineTo(-0.55, 0.36);
-    canopyShape.closePath();
+    const noseBridgeGlow = new THREE.BoxGeometry(0.54, 0.035, 0.08);
+    addPart('accentGlow', noseBridgeGlow, 0, 0.06, 2.52);
+    noseBridgeGlow.dispose();
 
-    const canopyGeo = trackGeo(
-      new THREE.ExtrudeGeometry(canopyShape, {
-        depth: 0.86,
-        bevelEnabled: true,
-        bevelThickness: 0.08,
-        bevelSize: 0.06,
-        bevelSegments: 3,
-      })
+    // Cobalt Racing Sidepods + Recessed Side Intake Throats & Titanium Aero Vanes
+    const sidepodGeo = makeCenteredExtrude(
+      [
+        [-1.85, -0.04],
+        [0.95, -0.04],
+        [1.15, 0.08],
+        [0.85, 0.24],
+        [-1.72, 0.24],
+      ],
+      0.34,
+      0.045,
+      0.035,
+      2
     );
-    canopyGeo.translate(0, 0, -0.43);
-    canopyGeo.rotateY(-Math.PI / 2);
-    canopyGeo.computeVertexNormals();
-    const canopyMesh = new THREE.Mesh(canopyGeo, canopyMat);
-    canopyMesh.position.set(0, 0.36, -0.05);
-    canopyMesh.castShadow = effectiveCastShadow;
-    chassisGroup.add(canopyMesh);
+    const sideIntakeThroat = new THREE.BoxGeometry(0.24, 0.18, 0.36);
+    const sideIntakeVane = new THREE.BoxGeometry(0.22, 0.025, 0.26);
+    const sideSkirtTrim = new THREE.BoxGeometry(0.06, 0.035, 2.15);
 
-    // Forward Canards + Cyan LED Blades
-    const canardGeo = trackGeo(new THREE.BoxGeometry(0.68, 0.06, 0.85));
+    [-0.9, 0.9].forEach((sx) => {
+      addPart('secondary', sidepodGeo, sx, 0.04, 0);
+      addPart('carbon', sideIntakeThroat, sx + (sx > 0 ? 0.03 : -0.03), 0.12, 0.92);
+      addPart('titanium', sideIntakeVane, sx + (sx > 0 ? 0.03 : -0.03), 0.12, 0.96);
+      addPart('accentGlow', sideSkirtTrim, sx + (sx > 0 ? 0.16 : -0.16), -0.08, -0.25);
+    });
+    sidepodGeo.dispose();
+    sideIntakeThroat.dispose();
+    sideIntakeVane.dispose();
+    sideSkirtTrim.dispose();
+
+    // Smoked GT Bubble Canopy + Cockpit Interior Tub + Roof Intake Snorkel
+    const tubGeo = new THREE.BoxGeometry(0.76, 0.15, 1.54);
+    addPart('cockpitInterior', tubGeo, 0, 0.35, -0.02);
+    tubGeo.dispose();
+
+    const rollCageGeo = new THREE.TorusGeometry(0.3, 0.036, 8, 16, Math.PI);
+    addPart('titanium', rollCageGeo, 0, 0.43, -0.44);
+    rollCageGeo.dispose();
+
+    const hudDashGeo = new THREE.BoxGeometry(0.46, 0.03, 0.045);
+    addPart('accentGlow', hudDashGeo, 0, 0.44, 0.62, -0.3, 0, 0);
+    hudDashGeo.dispose();
+
+    const canopyGeo = makeCenteredExtrude(
+      [
+        [-1.12, 0.0],
+        [1.06, 0.0],
+        [0.48, 0.35],
+        [-0.56, 0.37],
+      ],
+      0.86,
+      0.08,
+      0.06,
+      3
+    );
+    addPart('canopy', canopyGeo, 0, 0.36, -0.04);
+    canopyGeo.dispose();
+
+    const roofScoopGeo = makeCenteredExtrude(
+      [
+        [-1.35, 0.42],
+        [-0.22, 0.68],
+        [-0.45, 0.78],
+        [-1.38, 0.56],
+      ],
+      0.22,
+      0.03,
+      0.025,
+      2
+    );
+    addPart('secondary', roofScoopGeo);
+    roofScoopGeo.dispose();
+
+    // Swept Front Canards + Upturned Endplates + Cyan Edge Blades
+    const canardEndplateGeo = new THREE.BoxGeometry(0.045, 0.18, 0.52);
+    const canardGlowGeo = new THREE.BoxGeometry(0.7, 0.032, 0.075);
     [-1, 1].forEach((side) => {
-      const canard = new THREE.Mesh(canardGeo, secondaryMat);
-      canard.position.set(side * 1.02, -0.02, 1.52);
-      canard.rotation.y = side * -0.22;
-      canard.rotation.z = side * -0.08;
-      canard.castShadow = effectiveCastShadow;
-      chassisGroup.add(canard);
+      const canardWingGeo = createSweptWingGeometry({
+        side: side as -1 | 1,
+        rootX: 0.76,
+        tipX: 1.44,
+        rootZFront: 1.98,
+        rootZBack: 1.24,
+        tipZFront: 1.66,
+        tipZBack: 1.12,
+        rootY: -0.02,
+        tipY: 0.03,
+        rootThick: 0.08,
+        tipThick: 0.045,
+      });
+      addPart('secondary', canardWingGeo);
+      canardWingGeo.dispose();
 
-      const blade = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.62, 0.035, 0.08)), accentGlowMat);
-      blade.position.set(side * 1.04, 0.01, 1.92);
-      blade.rotation.y = side * -0.22;
-      chassisGroup.add(blade);
+      addPart('carbon', canardEndplateGeo, side * 1.45, 0.05, 1.39);
+      addPart('accentGlow', canardGlowGeo, side * 1.1, 0.015, 1.84, 0, side * -0.44, side * 0.06);
     });
+    canardEndplateGeo.dispose();
+    canardGlowGeo.dispose();
 
-    // 4 Turbine Pods
+    // 4 Repulsor Turbine Pods
     [
       [-1.08, 1.25],
       [1.08, 1.25],
       [-1.16, -1.35],
       [1.16, -1.35],
-    ].forEach(([px, pz]) => {
-      const pod = new THREE.Mesh(podGeo, brushedTitaniumMat);
-      pod.position.set(px, -0.16, pz);
-      pod.castShadow = effectiveCastShadow;
-      chassisGroup.add(pod);
-      const coil = new THREE.Mesh(coilGeo, accentGlowMat);
-      coil.position.set(px, -0.28, pz);
-      chassisGroup.add(coil);
-    });
+    ].forEach(([px, pz]) => addTurbinePod(px, pz, -0.16, 1.0));
 
-    // High-Downforce Split GT Wing
-    const finGeo = trackGeo(new THREE.BoxGeometry(0.08, 0.62, 0.95));
+    // Swan-Neck Split GT Rear Wing + Sculpted Endplates + Dorsal Spine Fin
+    const swanPylonGeo = makeCenteredExtrude(
+      [
+        [-2.06, 0.28],
+        [-1.56, 0.28],
+        [-1.82, 0.92],
+        [-2.24, 0.92],
+      ],
+      0.07,
+      0.015,
+      0.015,
+      1
+    );
+    const wingEndplateGeo = makeCenteredExtrude(
+      [
+        [-2.38, 0.52],
+        [-1.78, 0.6],
+        [-1.88, 1.02],
+        [-2.42, 0.98],
+      ],
+      0.055,
+      0.015,
+      0.015,
+      1
+    );
+    const endplateGlowGeo = new THREE.BoxGeometry(0.035, 0.04, 0.46);
+
     [-1, 1].forEach((side) => {
-      const fin = new THREE.Mesh(finGeo, secondaryMat);
-      fin.position.set(side * 0.88, 0.56, -1.85);
-      fin.rotation.z = side * -0.22;
-      fin.castShadow = effectiveCastShadow;
-      chassisGroup.add(fin);
+      addPart('secondary', swanPylonGeo, side * 0.62, 0, 0);
+      addPart('secondary', wingEndplateGeo, side * 1.18, 0, 0);
+      addPart('accentGlow', endplateGlowGeo, side * 1.21, 0.88, -2.14, 0.08, 0, 0);
+    });
+    swanPylonGeo.dispose();
+    wingEndplateGeo.dispose();
+    endplateGlowGeo.dispose();
+
+    // Dual-element carbon rear GT airfoil (mainplane + upper DRS flap)
+    [-1, 1].forEach((side) => {
+      const mainWingGeo = createSweptWingGeometry({
+        side: side as -1 | 1,
+        rootX: 0.0,
+        tipX: 1.17,
+        rootZFront: -1.82,
+        rootZBack: -2.26,
+        tipZFront: -1.88,
+        tipZBack: -2.28,
+        rootY: 0.82,
+        tipY: 0.84,
+        rootThick: 0.095,
+        tipThick: 0.075,
+      });
+      addPart('carbon', mainWingGeo);
+      mainWingGeo.dispose();
     });
 
-    const wingMesh = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.3, 0.08, 0.44)), carbonMat);
-    wingMesh.position.set(0, 0.84, -2.08);
-    wingMesh.rotation.x = 0.12;
-    wingMesh.castShadow = effectiveCastShadow;
-    chassisGroup.add(wingMesh);
+    const drsFlapGeo = new THREE.BoxGeometry(2.3, 0.045, 0.16);
+    addPart('carbon', drsFlapGeo, 0, 0.92, -2.28, 0.24, 0, 0);
+    drsFlapGeo.dispose();
 
-    const wingTrim = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.34, 0.03, 0.08)), accentGlowMat);
-    wingTrim.position.set(0, 0.85, -2.28);
-    chassisGroup.add(wingTrim);
+    const wingTrim = new THREE.BoxGeometry(2.36, 0.032, 0.065);
+    addPart('accentGlow', wingTrim, 0, 0.84, -2.31);
+    wingTrim.dispose();
 
-    // Dorsal Spine & Tailbar
-    const spine = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.1, 0.05, 1.45)), accentGlowMat);
-    spine.position.set(0, 0.48, -1.15);
-    chassisGroup.add(spine);
+    // Dorsal Spine & Vent Fin
+    const dorsalFinGeo = makeCenteredExtrude(
+      [
+        [-2.18, 0.34],
+        [-0.85, 0.44],
+        [-1.92, 0.62],
+        [-2.22, 0.56],
+      ],
+      0.06,
+      0.015,
+      0.015,
+      1
+    );
+    addPart('secondary', dorsalFinGeo);
+    dorsalFinGeo.dispose();
+    const spineGlow = new THREE.BoxGeometry(0.07, 0.045, 1.25);
+    addPart('accentGlow', spineGlow, 0, 0.55, -1.48, 0.13, 0, 0);
+    spineGlow.dispose();
 
-    const tailBar = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.52, 0.07, 0.07)), tailLightMat);
-    tailBar.position.set(0, 0.2, -2.42);
-    chassisGroup.add(tailBar);
+    // Carbon Rear Diffuser + Cybernetic Tailbar + F1 Center Rain Light
+    const diffuserGeo = new THREE.BoxGeometry(1.66, 0.08, 0.48);
+    addPart('carbon', diffuserGeo, 0, -0.125, -2.26, 0.16, 0, 0);
+    diffuserGeo.dispose();
+    const diffStrakeGeo = new THREE.BoxGeometry(0.04, 0.18, 0.44);
+    [-0.64, -0.24, 0.24, 0.64].forEach((sx) => addPart('carbon', diffStrakeGeo, sx, -0.09, -2.29));
+    diffStrakeGeo.dispose();
 
-    // Twin Rear Plasma Thrusters
-    const nozzleGeo = trackGeo(new THREE.CylinderGeometry(0.18, 0.24, 0.34, 16));
-    nozzleGeo.rotateX(Math.PI / 2);
-    const flameGeo = trackGeo(new THREE.ConeGeometry(0.16, 1.15, 14));
+    const tailBar = new THREE.BoxGeometry(1.56, 0.068, 0.075);
+    addPart('tailLight', tailBar, 0, 0.2, -2.44);
+    tailBar.dispose();
+    const f1RainLight = new THREE.BoxGeometry(0.12, 0.11, 0.07);
+    addPart('tailLight', f1RainLight, 0, 0.02, -2.45);
+    f1RainLight.dispose();
+
+    // Twin Wide Afterburners
+    const flameGeo = trackGeo(new THREE.ConeGeometry(0.17, 1.25, 14));
     flameGeo.rotateX(-Math.PI / 2);
-    flameGeo.translate(0, 0, -0.575);
-    [-0.44, 0.44].forEach((tx) => {
-      const nozzle = new THREE.Mesh(nozzleGeo, brushedTitaniumMat);
-      nozzle.position.set(tx, 0.06, -2.38);
-      chassisGroup.add(nozzle);
-      const flame = new THREE.Mesh(flameGeo, flameMat);
-      flame.position.set(tx, 0.06, -2.52);
-      chassisGroup.add(flame);
-      thrusterFlames.push(flame);
+    flameGeo.translate(0, 0, -0.625);
+    const coreFlameGeo = trackGeo(new THREE.ConeGeometry(0.16, 1.2, 10));
+    coreFlameGeo.rotateX(-Math.PI / 2);
+    coreFlameGeo.translate(0, 0, -0.6);
+
+    [-0.44, 0.44].forEach((tx) => addAfterburner(tx, 0.06, -2.38, 0.23, 0.38, 0.17, 1.25, flameGeo, coreFlameGeo));
+  } else if (chassisStyle === 'solaris') {
+    // =========================================================================
+    // SOLARIS-7 (Ace Rival): Catamaran Solar Spear + Gull Wings + Halo Arch
+    // =========================================================================
+    // Central high-speed needle spine fuselage
+    const centerHullGeo = makeCenteredExtrude(
+      [
+        [-2.48, -0.13],
+        [1.92, -0.13],
+        [2.78, 0.04],
+        [1.52, 0.27],
+        [0.18, 0.42],
+        [-1.42, 0.43],
+        [-2.48, 0.24],
+      ],
+      0.78,
+      0.1,
+      0.07,
+      3
+    );
+    addPart('hull', centerHullGeo);
+    centerHullGeo.dispose();
+
+    // Solar-gold forward spear tip & dorsal solar collector spine
+    const goldSpearGeo = makeCenteredExtrude(
+      [
+        [1.45, 0.0],
+        [2.96, 0.01],
+        [2.45, 0.15],
+        [1.35, 0.25],
+      ],
+      0.26,
+      0.03,
+      0.025,
+      2
+    );
+    addPart('secondary', goldSpearGeo);
+    goldSpearGeo.dispose();
+
+    const undertrayGeo = new THREE.BoxGeometry(1.78, 0.1, 4.35);
+    addPart('carbon', undertrayGeo, 0, -0.15, -0.08);
+    undertrayGeo.dispose();
+
+    // Twin Catamaran Intake Sponsons flanking center nose
+    const sponsonGeo = makeCenteredExtrude(
+      [
+        [-2.15, -0.12],
+        [1.68, -0.11],
+        [2.05, 0.02],
+        [1.58, 0.18],
+        [-2.05, 0.22],
+      ],
+      0.42,
+      0.045,
+      0.035,
+      2
+    );
+    const intakeVoidGeo = new THREE.BoxGeometry(0.28, 0.16, 0.42);
+    const intakeVaneGeo = new THREE.BoxGeometry(0.24, 0.025, 0.28);
+    const sponsonDrlGeo = new THREE.BoxGeometry(0.26, 0.045, 0.14);
+    const sponsonGlowRail = new THREE.BoxGeometry(0.055, 0.04, 2.55);
+
+    [-0.78, 0.78].forEach((sx) => {
+      addPart('hull', sponsonGeo, sx, 0, 0);
+      addPart('carbon', intakeVoidGeo, sx, 0.04, 1.88);
+      addPart('titanium', intakeVaneGeo, sx, 0.04, 1.94);
+      addPart('headlight', sponsonDrlGeo, sx, 0.12, 1.98, 0.14, sx > 0 ? -0.24 : 0.24, 0);
+      addPart('accentGlow', sponsonGlowRail, sx + (sx > 0 ? 0.19 : -0.19), 0.16, 0.18);
     });
+    sponsonGeo.dispose();
+    intakeVoidGeo.dispose();
+    intakeVaneGeo.dispose();
+    sponsonDrlGeo.dispose();
+    sponsonGlowRail.dispose();
+
+    // Streamlined Teardrop Cockpit + Solar Halo Spine Arch
+    const tubGeo = new THREE.BoxGeometry(0.64, 0.15, 1.44);
+    addPart('cockpitInterior', tubGeo, 0, 0.34, 0.04);
+    tubGeo.dispose();
+
+    const rollHoopGeo = new THREE.TorusGeometry(0.27, 0.034, 8, 16, Math.PI);
+    addPart('titanium', rollHoopGeo, 0, 0.42, -0.36);
+    rollHoopGeo.dispose();
+
+    const hudBarGeo = new THREE.BoxGeometry(0.4, 0.03, 0.04);
+    addPart('accentGlow', hudBarGeo, 0, 0.43, 0.58, -0.32, 0, 0);
+    hudBarGeo.dispose();
+
+    const canopyGeo = new THREE.CapsuleGeometry(0.36, 1.12, 8, 16);
+    canopyGeo.rotateX(Math.PI / 2);
+    canopyGeo.scale(1.0, 0.68, 1.0);
+    addPart('canopy', canopyGeo, 0, 0.42, 0.05, 0, 0, 0, 1, 1, 1, 'box');
+    canopyGeo.dispose();
+
+    // Signature Solar Collector Halo Arch curving over engine deck
+    const haloArchGeo = new THREE.TorusGeometry(0.56, 0.055, 8, 22, Math.PI);
+    haloArchGeo.rotateY(Math.PI / 2);
+    addPart('secondary', haloArchGeo, 0, 0.42, -1.05);
+    haloArchGeo.dispose();
+
+    const haloGlowCore = new THREE.TorusGeometry(0.56, 0.025, 6, 20, Math.PI * 0.72);
+    haloGlowCore.rotateY(Math.PI / 2);
+    addPart('accentGlow', haloGlowCore, 0, 0.43, -1.05, 0, 0, 0);
+    haloGlowCore.dispose();
+
+    // Swept Gull-Dihedral Main Wings + Vertical Solar Winglets
+    const wingletGeo = makeCenteredExtrude(
+      [
+        [-1.92, 0.22],
+        [-1.12, 0.26],
+        [-1.48, 0.68],
+        [-2.04, 0.62],
+      ],
+      0.06,
+      0.015,
+      0.015,
+      1
+    );
+    const wingLeadGlow = new THREE.BoxGeometry(1.12, 0.035, 0.075);
+    const wingCarbonFlap = new THREE.BoxGeometry(1.02, 0.035, 0.2);
+
+    [-1, 1].forEach((side) => {
+      const gullWingGeo = createSweptWingGeometry({
+        side: side as -1 | 1,
+        rootX: 0.96,
+        tipX: 2.02,
+        rootZFront: 0.15,
+        rootZBack: -1.45,
+        tipZFront: -0.92,
+        tipZBack: -1.86,
+        rootY: 0.08,
+        tipY: 0.24,
+        rootThick: 0.13,
+        tipThick: 0.06,
+      });
+      addPart('hull', gullWingGeo);
+      gullWingGeo.dispose();
+
+      addPart('secondary', wingletGeo, side * 2.02, 0.02, 0, 0, 0, side * -0.14);
+      addPart('accentGlow', wingLeadGlow, side * 1.5, 0.17, -0.38, 0, side * -0.78, side * 0.15);
+      addPart('carbon', wingCarbonFlap, side * 1.48, 0.14, -1.68, 0, side * -0.36, side * 0.15);
+    });
+    wingletGeo.dispose();
+    wingLeadGlow.dispose();
+    wingCarbonFlap.dispose();
+
+    // Inward-Canted Twin Tail Fins + High Bridge Spoiler
+    const tailFinGeo = makeCenteredExtrude(
+      [
+        [-2.42, 0.24],
+        [-1.38, 0.28],
+        [-1.92, 0.92],
+        [-2.48, 0.88],
+      ],
+      0.075,
+      0.02,
+      0.015,
+      2
+    );
+    [-1, 1].forEach((side) => {
+      addPart('secondary', tailFinGeo, side * 0.72, 0, 0, 0, 0, side * 0.26);
+    });
+    tailFinGeo.dispose();
+
+    const bridgeWingGeo = new THREE.BoxGeometry(1.18, 0.055, 0.34);
+    addPart('carbon', bridgeWingGeo, 0, 0.86, -2.18, 0.14, 0, 0);
+    bridgeWingGeo.dispose();
+    const bridgeGlow = new THREE.BoxGeometry(1.2, 0.03, 0.06);
+    addPart('accentGlow', bridgeGlow, 0, 0.88, -2.33);
+    bridgeGlow.dispose();
+
+    // 4 Repulsor Turbine Pods
+    [
+      [-1.08, 1.32],
+      [1.08, 1.32],
+      [-1.26, -1.42],
+      [1.26, -1.42],
+    ].forEach(([px, pz]) => addTurbinePod(px, pz, -0.16, 1.0));
+
+    // Carbon Rear Diffuser + Segmented Taillights + Tri-Jet Solar Afterburners
+    const diffuserGeo = new THREE.BoxGeometry(1.56, 0.08, 0.46);
+    addPart('carbon', diffuserGeo, 0, -0.125, -2.38, 0.16, 0, 0);
+    diffuserGeo.dispose();
+    const strakeGeo = new THREE.BoxGeometry(0.04, 0.17, 0.44);
+    [-0.58, -0.2, 0.2, 0.58].forEach((sx) => addPart('carbon', strakeGeo, sx, -0.09, -2.4));
+    strakeGeo.dispose();
+
+    const tailBarGeo = new THREE.BoxGeometry(0.54, 0.068, 0.08);
+    [-0.52, 0.52].forEach((tx) => addPart('tailLight', tailBarGeo, tx, 0.23, -2.5));
+    tailBarGeo.dispose();
+
+    const flameGeo = trackGeo(new THREE.ConeGeometry(0.2, 1.45, 14));
+    flameGeo.rotateX(-Math.PI / 2);
+    flameGeo.translate(0, 0, -0.725);
+    const coreFlameGeo = trackGeo(new THREE.ConeGeometry(0.18, 1.4, 10));
+    coreFlameGeo.rotateX(-Math.PI / 2);
+    coreFlameGeo.translate(0, 0, -0.7);
+
+    [-0.54, 0.54].forEach((tx) => addAfterburner(tx, 0.05, -2.48, 0.24, 0.42, 0.2, 1.45, flameGeo, coreFlameGeo));
+    addAfterburner(0, 0.22, -2.44, 0.18, 0.34, 0.16, 1.25, flameGeo, coreFlameGeo);
+  } else if (chassisStyle === 'crimson') {
+    // =========================================================================
+    // CRIMSON-IX (Tactical Item Rival): Armored Gunship + Scythe Bi-Wings
+    // =========================================================================
+    const hullGeo = makeCenteredExtrude(
+      [
+        [-2.26, -0.14],
+        [1.56, -0.14],
+        [2.32, 0.02],
+        [1.34, 0.32],
+        [-0.22, 0.46],
+        [-2.26, 0.28],
+      ],
+      1.36,
+      0.11,
+      0.08,
+      3
+    );
+    addPart('hull', hullGeo);
+    hullGeo.dispose();
+
+    // Armored Crimson Ram-Nose Plow & Carbon Chin Dam
+    const ramPlowGeo = makeCenteredExtrude(
+      [
+        [1.42, -0.12],
+        [2.58, -0.08],
+        [2.38, 0.12],
+        [1.22, 0.24],
+      ],
+      0.78,
+      0.04,
+      0.03,
+      2
+    );
+    addPart('secondary', ramPlowGeo);
+    ramPlowGeo.dispose();
+
+    const undertrayGeo = new THREE.BoxGeometry(1.74, 0.11, 4.1);
+    addPart('carbon', undertrayGeo, 0, -0.15, -0.05);
+    undertrayGeo.dispose();
+
+    // Fierce Slanted Visor Headlights + Twin Recessed Nose Sensor Slits
+    const eyeBladeGeo = new THREE.BoxGeometry(0.38, 0.045, 0.14);
+    const noseIntakeGeo = new THREE.BoxGeometry(0.28, 0.12, 0.34);
+    [-0.48, 0.48].forEach((nx) => {
+      addPart('headlight', eyeBladeGeo, nx, 0.12, 2.1, 0.14, nx > 0 ? -0.32 : 0.32, nx > 0 ? -0.14 : 0.14);
+      addPart('carbon', noseIntakeGeo, nx, 0.02, 2.08);
+    });
+    eyeBladeGeo.dispose();
+    noseIntakeGeo.dispose();
+
+    // Aggressive Forward-Raked Scythe Canards
+    const canardGlowGeo = new THREE.BoxGeometry(0.66, 0.032, 0.075);
+    [-1, 1].forEach((side) => {
+      const scytheCanard = createSweptWingGeometry({
+        side: side as -1 | 1,
+        rootX: 0.68,
+        tipX: 1.46,
+        rootZFront: 1.65,
+        rootZBack: 1.05,
+        tipZFront: 2.08,
+        tipZBack: 1.56,
+        rootY: 0.02,
+        tipY: 0.08,
+        rootThick: 0.08,
+        tipThick: 0.04,
+      });
+      addPart('secondary', scytheCanard);
+      scytheCanard.dispose();
+      addPart('accentGlow', canardGlowGeo, side * 1.08, 0.05, 1.88, 0, side * 0.48, side * 0.06);
+    });
+    canardGlowGeo.dispose();
+
+    // Faceted Combat Canopy + Cheek Armor Plates + Tactical HUD
+    const tubGeo = new THREE.BoxGeometry(0.74, 0.15, 1.46);
+    addPart('cockpitInterior', tubGeo, 0, 0.36, 0.08);
+    tubGeo.dispose();
+
+    const rollBarGeo = new THREE.TorusGeometry(0.3, 0.036, 8, 16, Math.PI);
+    addPart('titanium', rollBarGeo, 0, 0.44, -0.34);
+    rollBarGeo.dispose();
+
+    const hudBarGeo = new THREE.BoxGeometry(0.44, 0.032, 0.04);
+    addPart('accentGlow', hudBarGeo, 0, 0.46, 0.66, -0.32, 0, 0);
+    hudBarGeo.dispose();
+
+    const combatCanopyGeo = makeCenteredExtrude(
+      [
+        [-0.78, 0.32],
+        [1.02, 0.32],
+        [0.44, 0.62],
+        [-0.42, 0.66],
+      ],
+      0.74,
+      0.06,
+      0.05,
+      2
+    );
+    addPart('canopy', combatCanopyGeo, 0, 0, 0.04);
+    combatCanopyGeo.dispose();
+
+    const cheekArmorGeo = new THREE.BoxGeometry(0.16, 0.18, 1.18);
+    [-0.5, 0.5].forEach((cx) => addPart('titanium', cheekArmorGeo, cx, 0.44, 0.05, 0, 0, cx > 0 ? -0.22 : 0.22));
+    cheekArmorGeo.dispose();
+
+    // Heavy Twin-Rail Dorsal Weapon & Countermeasure Launcher Array
+    const launcherDeckGeo = new THREE.BoxGeometry(0.76, 0.22, 1.18);
+    addPart('carbon', launcherDeckGeo, 0, 0.56, -1.16);
+    launcherDeckGeo.dispose();
+
+    const railBarrelGeo = new THREE.CylinderGeometry(0.065, 0.075, 1.05, 10);
+    railBarrelGeo.rotateX(Math.PI / 2);
+    const emitterTipGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.06, 10);
+    emitterTipGeo.rotateX(Math.PI / 2);
+    [-0.24, 0.24].forEach((rx) => {
+      addPart('titanium', railBarrelGeo, rx, 0.68, -0.96, 0, 0, 0, 1, 1, 1, 'keep');
+      addPart('accentGlow', emitterTipGeo, rx, 0.68, -0.41);
+    });
+    railBarrelGeo.dispose();
+    emitterTipGeo.dispose();
+
+    // Split-Plane X-Scythe Wings (Upper Crimson Swept Wing + Lower Carbon Wing + Tip Armor Pods)
+    const tipBladePodGeo = makeCenteredExtrude(
+      [
+        [-1.62, -0.14],
+        [0.48, -0.12],
+        [0.72, 0.04],
+        [0.36, 0.22],
+        [-1.56, 0.24],
+      ],
+      0.14,
+      0.025,
+      0.02,
+      2
+    );
+    const tipRailGlow = new THREE.BoxGeometry(0.045, 0.045, 1.92);
+
+    [-1, 1].forEach((side) => {
+      const upperWingGeo = createSweptWingGeometry({
+        side: side as -1 | 1,
+        rootX: 0.72,
+        tipX: 1.94,
+        rootZFront: 0.16,
+        rootZBack: -0.98,
+        tipZFront: -0.28,
+        tipZBack: -1.32,
+        rootY: 0.18,
+        tipY: 0.34,
+        rootThick: 0.11,
+        tipThick: 0.055,
+      });
+      addPart('secondary', upperWingGeo);
+      upperWingGeo.dispose();
+
+      const lowerWingGeo = createSweptWingGeometry({
+        side: side as -1 | 1,
+        rootX: 0.72,
+        tipX: 1.94,
+        rootZFront: 0.08,
+        rootZBack: -1.04,
+        tipZFront: -0.32,
+        tipZBack: -1.36,
+        rootY: -0.02,
+        tipY: -0.14,
+        rootThick: 0.09,
+        tipThick: 0.05,
+      });
+      addPart('carbon', lowerWingGeo);
+      lowerWingGeo.dispose();
+
+      addPart('hull', tipBladePodGeo, side * 1.96, 0.08, -0.45);
+      addPart('accentGlow', tipRailGlow, side * 2.04, 0.14, -0.52);
+    });
+    tipBladePodGeo.dispose();
+    tipRailGlow.dispose();
+
+    // Twin Outward-Slanted Combat Stabilizers
+    const stabGeo = makeCenteredExtrude(
+      [
+        [-2.28, 0.24],
+        [-1.46, 0.3],
+        [-1.96, 0.86],
+        [-2.34, 0.8],
+      ],
+      0.09,
+      0.02,
+      0.02,
+      2
+    );
+    [-1, 1].forEach((side) => addPart('secondary', stabGeo, side * 0.64, 0, 0, 0, 0, side * -0.34));
+    stabGeo.dispose();
+
+    // 4 Repulsor Turbine Pods
+    [
+      [-1.12, 1.05],
+      [1.12, 1.05],
+      [-1.18, -1.45],
+      [1.18, -1.45],
+    ].forEach(([px, pz]) => addTurbinePod(px, pz, -0.16, 1.02));
+
+    // Heavy Diffuser + Dual Crimson Chevron Taillights + Twin Heavy Thrusters
+    const diffuserGeo = new THREE.BoxGeometry(1.62, 0.08, 0.48);
+    addPart('carbon', diffuserGeo, 0, -0.13, -2.18, 0.16, 0, 0);
+    diffuserGeo.dispose();
+    const strakeGeo = new THREE.BoxGeometry(0.04, 0.18, 0.44);
+    [-0.6, -0.22, 0.22, 0.6].forEach((sx) => addPart('carbon', strakeGeo, sx, -0.09, -2.22));
+    strakeGeo.dispose();
+
+    const tailChevronGeo = new THREE.BoxGeometry(0.56, 0.075, 0.08);
+    [-0.48, 0.48].forEach((tx) => addPart('tailLight', tailChevronGeo, tx, 0.24, -2.32, 0, 0, tx > 0 ? 0.14 : -0.14));
+    tailChevronGeo.dispose();
+
+    const flameGeo = trackGeo(new THREE.ConeGeometry(0.19, 1.32, 14));
+    flameGeo.rotateX(-Math.PI / 2);
+    flameGeo.translate(0, 0, -0.66);
+    const coreFlameGeo = trackGeo(new THREE.ConeGeometry(0.18, 1.26, 10));
+    coreFlameGeo.rotateX(-Math.PI / 2);
+    coreFlameGeo.translate(0, 0, -0.63);
+
+    [-0.44, 0.44].forEach((tx) => addAfterburner(tx, 0.05, -2.28, 0.24, 0.4, 0.19, 1.32, flameGeo, coreFlameGeo));
+  } else {
+    // =========================================================================
+    // AERO-TITAN (Steady Endurance Cruiser): Wide Twin-Sponson + Box-Wing Tail
+    // =========================================================================
+    const centerHullGeo = makeCenteredExtrude(
+      [
+        [-2.38, -0.14],
+        [1.74, -0.14],
+        [2.42, 0.04],
+        [1.46, 0.3],
+        [0.18, 0.46],
+        [-1.38, 0.48],
+        [-2.38, 0.26],
+      ],
+      1.26,
+      0.11,
+      0.08,
+      3
+    );
+    addPart('hull', centerHullGeo);
+    centerHullGeo.dispose();
+
+    // Heavy Full-Width Front Aero Dam + Carbon Undertray
+    const undertrayGeo = new THREE.BoxGeometry(2.38, 0.12, 4.35);
+    addPart('carbon', undertrayGeo, 0, -0.16, -0.05);
+    undertrayGeo.dispose();
+
+    const frontDamGeo = makeCenteredExtrude(
+      [
+        [1.42, -0.18],
+        [2.52, -0.16],
+        [2.54, -0.08],
+        [1.42, -0.1],
+      ],
+      2.18,
+      0.025,
+      0.02,
+      1
+    );
+    addPart('carbon', frontDamGeo);
+    frontDamGeo.dispose();
+
+    // Twin Wide Endurance Radiator Louvers & Broad Dual-Bar DRL Clusters
+    const grilleGeo = new THREE.BoxGeometry(0.48, 0.13, 0.34);
+    const grilleVane = new THREE.BoxGeometry(0.44, 0.025, 0.26);
+    const drlUpper = new THREE.BoxGeometry(0.44, 0.045, 0.12);
+    [-0.64, 0.64].forEach((nx) => {
+      addPart('carbon', grilleGeo, nx, 0.03, 2.2);
+      addPart('titanium', grilleVane, nx, 0.03, 2.24);
+      addPart('headlight', drlUpper, nx, 0.14, 2.18, 0.15, nx > 0 ? -0.16 : 0.16, 0);
+    });
+    grilleGeo.dispose();
+    grilleVane.dispose();
+    drlUpper.dispose();
+
+    // Massive Ground-Effect Endurance Side Sponsons (Mint-Pearl Deck + Carbon Venturi Skirts)
+    const sideSponsonGeo = makeCenteredExtrude(
+      [
+        [-2.35, -0.08],
+        [1.48, -0.08],
+        [1.82, 0.06],
+        [1.36, 0.26],
+        [-2.28, 0.28],
+      ],
+      0.56,
+      0.05,
+      0.04,
+      2
+    );
+    const sideDeckCapGeo = new THREE.BoxGeometry(0.48, 0.065, 3.25);
+    const sideGillGlow = new THREE.BoxGeometry(0.055, 0.045, 2.25);
+    const sideIntakeSlot = new THREE.BoxGeometry(0.36, 0.16, 0.34);
+
+    [-0.94, 0.94].forEach((sx) => {
+      addPart('hull', sideSponsonGeo, sx, 0, 0);
+      addPart('secondary', sideDeckCapGeo, sx, 0.27, -0.38);
+      addPart('carbon', sideIntakeSlot, sx, 0.1, 1.56);
+      addPart('accentGlow', sideGillGlow, sx + (sx > 0 ? 0.28 : -0.28), 0.12, -0.22);
+    });
+    sideSponsonGeo.dispose();
+    sideDeckCapGeo.dispose();
+    sideGillGlow.dispose();
+    sideIntakeSlot.dispose();
+
+    // Broad LMP Endurance Canopy + Heavy Mint Roof Roll-Scoop + Cockpit Tub
+    const tubGeo = new THREE.BoxGeometry(0.84, 0.16, 1.52);
+    addPart('cockpitInterior', tubGeo, 0, 0.38, 0.02);
+    tubGeo.dispose();
+
+    const rollBarGeo = new THREE.TorusGeometry(0.34, 0.04, 8, 16, Math.PI);
+    addPart('titanium', rollBarGeo, 0, 0.46, -0.4);
+    rollBarGeo.dispose();
+
+    const hudBarGeo = new THREE.BoxGeometry(0.52, 0.032, 0.045);
+    addPart('accentGlow', hudBarGeo, 0, 0.47, 0.62, -0.28, 0, 0);
+    hudBarGeo.dispose();
+
+    const canopyGeo = makeCenteredExtrude(
+      [
+        [-1.08, 0.0],
+        [1.04, 0.0],
+        [0.48, 0.34],
+        [-0.58, 0.36],
+      ],
+      0.94,
+      0.075,
+      0.06,
+      3
+    );
+    addPart('canopy', canopyGeo, 0, 0.38, 0.0);
+    canopyGeo.dispose();
+
+    const airboxGeo = makeCenteredExtrude(
+      [
+        [-1.48, 0.44],
+        [-0.2, 0.7],
+        [-0.52, 0.82],
+        [-1.52, 0.6],
+      ],
+      0.34,
+      0.035,
+      0.025,
+      2
+    );
+    addPart('secondary', airboxGeo);
+    airboxGeo.dispose();
+
+    // Twin-Boom Endurance Tail Towers + Bi-Plane Box Rear Wing
+    const boomTowerGeo = makeCenteredExtrude(
+      [
+        [-2.42, 0.24],
+        [-1.48, 0.26],
+        [-1.78, 0.94],
+        [-2.48, 0.9],
+      ],
+      0.11,
+      0.025,
+      0.02,
+      2
+    );
+    const boomTrimGlow = new THREE.BoxGeometry(0.045, 0.045, 0.62);
+    [-1, 1].forEach((side) => {
+      addPart('secondary', boomTowerGeo, side * 1.06, 0, 0);
+      addPart('accentGlow', boomTrimGlow, side * 1.12, 0.84, -2.14);
+    });
+    boomTowerGeo.dispose();
+    boomTrimGlow.dispose();
+
+    // Wide high-downforce carbon main wing + lower beam wing
+    [-1, 1].forEach((side) => {
+      const upperMainWing = createSweptWingGeometry({
+        side: side as -1 | 1,
+        rootX: 0.0,
+        tipX: 1.12,
+        rootZFront: -1.86,
+        rootZBack: -2.38,
+        tipZFront: -1.86,
+        tipZBack: -2.38,
+        rootY: 0.86,
+        tipY: 0.86,
+        rootThick: 0.11,
+        tipThick: 0.095,
+      });
+      addPart('carbon', upperMainWing);
+      upperMainWing.dispose();
+    });
+
+    const beamWingGeo = new THREE.BoxGeometry(2.12, 0.06, 0.28);
+    addPart('carbon', beamWingGeo, 0, 0.48, -2.28, 0.12, 0, 0);
+    beamWingGeo.dispose();
+
+    const wingRearGlow = new THREE.BoxGeometry(2.24, 0.036, 0.065);
+    addPart('accentGlow', wingRearGlow, 0, 0.87, -2.41);
+    wingRearGlow.dispose();
+
+    // Oversized Quad Endurance Repulsor Pods (1.14x scale)
+    [
+      [-1.16, 1.32],
+      [1.16, 1.32],
+      [-1.24, -1.36],
+      [1.24, -1.36],
+    ].forEach(([px, pz]) => addTurbinePod(px, pz, -0.16, 1.14));
+
+    // Broad Heavy Diffuser + Full-Width Endurance Taillight Array + Twin Crucible Thrusters
+    const diffuserGeo = new THREE.BoxGeometry(2.04, 0.09, 0.5);
+    addPart('carbon', diffuserGeo, 0, -0.13, -2.28, 0.16, 0, 0);
+    diffuserGeo.dispose();
+    const strakeGeo = new THREE.BoxGeometry(0.045, 0.2, 0.46);
+    [-0.82, -0.42, 0, 0.42, 0.82].forEach((sx) => addPart('carbon', strakeGeo, sx, -0.09, -2.32));
+    strakeGeo.dispose();
+
+    const tailBarGeo = new THREE.BoxGeometry(1.92, 0.075, 0.08);
+    addPart('tailLight', tailBarGeo, 0, 0.2, -2.44);
+    tailBarGeo.dispose();
+
+    const flameGeo = trackGeo(new THREE.ConeGeometry(0.21, 1.35, 14));
+    flameGeo.rotateX(-Math.PI / 2);
+    flameGeo.translate(0, 0, -0.675);
+    const coreFlameGeo = trackGeo(new THREE.ConeGeometry(0.2, 1.3, 10));
+    coreFlameGeo.rotateX(-Math.PI / 2);
+    coreFlameGeo.translate(0, 0, -0.65);
+
+    [-0.5, 0.5].forEach((tx) => addAfterburner(tx, 0.06, -2.4, 0.27, 0.42, 0.21, 1.35, flameGeo, coreFlameGeo));
+  }
+
+  // Dispose shared pod templates before merging buckets
+  podHousingGeo.dispose();
+  podStatorRingGeo.dispose();
+  podOuterCoilGeo.dispose();
+  podInnerCoreGeo.dispose();
+
+  // Merge each material bucket into a single optimized Mesh
+  const bucketConfig: {
+    key: BucketKey;
+    mat: THREE.Material;
+    castShadow: boolean;
+    receiveShadow: boolean;
+  }[] = [
+    { key: 'hull', mat: hullMat, castShadow: effectiveCastShadow, receiveShadow: true },
+    { key: 'secondary', mat: secondaryMat, castShadow: effectiveCastShadow, receiveShadow: true },
+    { key: 'carbon', mat: carbonMat, castShadow: effectiveCastShadow, receiveShadow: true },
+    { key: 'titanium', mat: brushedTitaniumMat, castShadow: effectiveCastShadow, receiveShadow: false },
+    { key: 'cockpitInterior', mat: cockpitInteriorMat, castShadow: false, receiveShadow: false },
+    { key: 'accentGlow', mat: accentGlowMat, castShadow: false, receiveShadow: false },
+    { key: 'headlight', mat: headlightMat, castShadow: false, receiveShadow: false },
+    { key: 'tailLight', mat: tailLightMat, castShadow: false, receiveShadow: false },
+    { key: 'canopy', mat: canopyMat, castShadow: false, receiveShadow: false },
+  ];
+
+  for (const cfg of bucketConfig) {
+    const parts = buckets[cfg.key];
+    if (parts.length === 0) continue;
+    const merged = parts.length === 1 ? parts[0] : mergeGeometries(parts, false);
+    if (parts.length > 1) {
+      parts.forEach((p) => p.dispose());
+    }
+    if (!merged) continue;
+    trackGeo(merged);
+    const mesh = new THREE.Mesh(merged, cfg.mat);
+    mesh.castShadow = cfg.castShadow;
+    mesh.receiveShadow = cfg.receiveShadow;
+    chassisGroup.add(mesh);
   }
 
   // Grounded Contact Shadow Plane (sits flush at Y = 0.03 above track)

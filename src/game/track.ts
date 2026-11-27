@@ -41,6 +41,7 @@ export interface TrackData {
   worldToMinimap: (x: number, z: number) => { x: number; y: number };
   sampleAtS: (s: number, out: TrackSample) => void;
   findClosestS: (pos: THREE.Vector3, hintS: number, outSample: TrackSample) => { s: number; lateral: number };
+  update: (dt: number, elapsed: number) => void;
   dispose: () => void;
 }
 
@@ -390,6 +391,8 @@ export function createTrack(
       emissive: new THREE.Color(0xffffff),
       emissiveIntensity: 1.35,
       roughnessMap: textures.trackRoughness,
+      bumpMap: textures.trackBump,
+      bumpScale: 0.042,
       roughness: 0.72,
       metalness: 0.35,
       side: THREE.DoubleSide,
@@ -433,6 +436,95 @@ export function createTrack(
   const railMesh = new THREE.Mesh(railGeo, railMat);
   group.add(railMesh);
 
+  // Guardrail Energy Barrier Stanchions (120 pairs = 240 instances in 1 draw call for rapid optical flow)
+  const stanchionPairs = 120;
+  const stanchionGeo = trackGeo(new THREE.BoxGeometry(0.32, 1.45, 0.42));
+  const stanchionMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x162238,
+      metalness: 0.82,
+      roughness: 0.32,
+    })
+  );
+  const stanchionInst = new THREE.InstancedMesh(stanchionGeo, stanchionMat, stanchionPairs * 2);
+  const stanchionDummy = new THREE.Object3D();
+  const _basisMat = new THREE.Matrix4();
+  const _basisLeft = new THREE.Vector3();
+  for (let i = 0; i < stanchionPairs; i++) {
+    const s = samples[Math.floor((i / stanchionPairs) * SAMPLE_COUNT)];
+    _basisLeft.copy(s.right).negate();
+    _basisMat.makeBasis(_basisLeft, s.up, s.tangent);
+    stanchionDummy.quaternion.setFromRotationMatrix(_basisMat);
+    stanchionDummy.scale.set(1, 1, 1);
+
+    stanchionDummy.position
+      .copy(s.position)
+      .addScaledVector(s.right, -(halfWidth + 0.34))
+      .addScaledVector(s.up, 0.42);
+    stanchionDummy.updateMatrix();
+    stanchionInst.setMatrixAt(i * 2, stanchionDummy.matrix);
+
+    stanchionDummy.position
+      .copy(s.position)
+      .addScaledVector(s.right, halfWidth + 0.34)
+      .addScaledVector(s.up, 0.42);
+    stanchionDummy.updateMatrix();
+    stanchionInst.setMatrixAt(i * 2 + 1, stanchionDummy.matrix);
+  }
+  stanchionInst.instanceMatrix.needsUpdate = true;
+  stanchionInst.computeBoundingSphere();
+  group.add(stanchionInst);
+
+  // Corner Turn Warning Chevron Boards on outside of tight turns (1 InstancedMesh)
+  const cornerPlacements: { sampleIdx: number; side: -1 | 1 }[] = [];
+  let lastCornerIdx = -24;
+  for (let i = 16; i < SAMPLE_COUNT - 16; i += 4) {
+    if (i - lastCornerIdx < 16) continue;
+    const bank = smoothBanks[i];
+    if (Math.abs(bank) > 0.1) {
+      // bank < 0 means right turn -> outside barrier is left (-1); bank > 0 means left turn -> outside is right (+1)
+      cornerPlacements.push({ sampleIdx: i, side: bank < 0 ? -1 : 1 });
+      lastCornerIdx = i;
+    }
+  }
+  if (cornerPlacements.length > 0) {
+    const chevronGeo = trackGeo(new THREE.PlaneGeometry(3.8, 1.8));
+    const chevronMat = trackMat(
+      new THREE.MeshBasicMaterial({
+        map: textures.cornerChevronTexture,
+        side: THREE.DoubleSide,
+      })
+    );
+    const chevronInst = new THREE.InstancedMesh(chevronGeo, chevronMat, cornerPlacements.length);
+    const rotYPi = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+    const rotZPi = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI);
+    const yawQuat = new THREE.Quaternion();
+    const upAxis = new THREE.Vector3(0, 1, 0);
+
+    cornerPlacements.forEach((cp, idx) => {
+      const s = samples[cp.sampleIdx];
+      _basisLeft.copy(s.right).negate();
+      _basisMat.makeBasis(_basisLeft, s.up, s.tangent);
+      stanchionDummy.quaternion.setFromRotationMatrix(_basisMat).multiply(rotYPi);
+      // Angle slightly inward toward oncoming driver and flip texture for left turns
+      yawQuat.setFromAxisAngle(upAxis, cp.side * 0.28);
+      stanchionDummy.quaternion.multiply(yawQuat);
+      if (cp.side === 1) {
+        stanchionDummy.quaternion.multiply(rotZPi);
+      }
+      stanchionDummy.position
+        .copy(s.position)
+        .addScaledVector(s.right, cp.side * (halfWidth + 0.45))
+        .addScaledVector(s.up, 2.2);
+      stanchionDummy.scale.set(1, 1, 1);
+      stanchionDummy.updateMatrix();
+      chevronInst.setMatrixAt(idx, stanchionDummy.matrix);
+    });
+    chevronInst.instanceMatrix.needsUpdate = true;
+    chevronInst.computeBoundingSphere();
+    group.add(chevronInst);
+  }
+
   // Start / Finish Laser Line Decal
   const startSample = samples[0];
   const sfGeo = trackGeo(new THREE.PlaneGeometry(halfWidth * 1.9, 4.2));
@@ -441,8 +533,8 @@ export function createTrack(
     new THREE.MeshStandardMaterial({
       map: textures.startFinishAlbedo,
       emissive: courseSpec.accentColor,
-      emissiveIntensity: 0.28,
-      roughness: 0.4,
+      emissiveIntensity: 0.34,
+      roughness: 0.38,
       polygonOffset: true,
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -2,
@@ -456,58 +548,110 @@ export function createTrack(
   sfMesh.receiveShadow = true;
   group.add(sfMesh);
 
-  // Start / Finish Futuristic Gantry Arch
+  // Start / Finish Championship Gantry Arch (Towers + Overhead Banner + Signal Pods + Beacons)
   const gantryGroup = new THREE.Group();
   gantryGroup.quaternion.setFromRotationMatrix(sfMatrix);
   gantryGroup.position.copy(startSample.position);
 
-  const pillarGeo = trackGeo(new THREE.BoxGeometry(1.1, 10.5, 1.4));
+  const pillarGeo = trackGeo(new THREE.BoxGeometry(1.3, 11.2, 1.7));
+  const pillarShoulderGeo = trackGeo(new THREE.BoxGeometry(1.75, 2.4, 2.2));
+  const pillarStripGeo = trackGeo(new THREE.BoxGeometry(0.18, 9.6, 1.78));
+  const beaconSpireGeo = trackGeo(new THREE.ConeGeometry(0.42, 2.4, 6));
   const pillarMat = trackMat(
     new THREE.MeshStandardMaterial({
       color: 0x162033,
-      metalness: 0.8,
-      roughness: 0.28,
+      metalness: 0.82,
+      roughness: 0.26,
     })
   );
   const gantryGlowMat = trackMat(
     new THREE.MeshStandardMaterial({
       color: courseSpec.railColor,
       emissive: courseSpec.railEmissive,
-      emissiveIntensity: 2.2,
+      emissiveIntensity: 2.3,
       roughness: 0.2,
     })
   );
 
-  [-halfWidth - 0.8, halfWidth + 0.8].forEach((px) => {
+  [-halfWidth - 0.9, halfWidth + 0.9].forEach((px) => {
     const p = new THREE.Mesh(pillarGeo, pillarMat);
-    p.position.set(px, 5.2, 0);
+    p.position.set(px, 5.5, 0);
     p.castShadow = !isSoftwareGl;
     gantryGroup.add(p);
+
+    const foot = new THREE.Mesh(pillarShoulderGeo, pillarMat);
+    foot.position.set(px, 1.2, 0);
+    gantryGroup.add(foot);
+
+    const strip = new THREE.Mesh(pillarStripGeo, gantryGlowMat);
+    strip.position.set(px + (px > 0 ? -0.64 : 0.64), 5.6, 0);
+    gantryGroup.add(strip);
+
+    const spire = new THREE.Mesh(beaconSpireGeo, gantryGlowMat);
+    spire.position.set(px, 12.3, 0);
+    gantryGroup.add(spire);
   });
 
-  const beamGeo = trackGeo(new THREE.BoxGeometry(halfWidth * 2 + 3.0, 1.4, 1.8));
+  const beamGeo = trackGeo(new THREE.BoxGeometry(halfWidth * 2 + 3.4, 1.5, 1.9));
   const beam = new THREE.Mesh(beamGeo, pillarMat);
-  beam.position.set(0, 10.2, 0);
+  beam.position.set(0, 10.6, 0);
   gantryGroup.add(beam);
 
-  const lightBarGeo = trackGeo(new THREE.BoxGeometry(halfWidth * 1.8, 0.35, 1.9));
+  const upperTrussGeo = trackGeo(new THREE.BoxGeometry(halfWidth * 2 + 2.2, 0.45, 1.3));
+  const upperTruss = new THREE.Mesh(upperTrussGeo, pillarMat);
+  upperTruss.position.set(0, 11.6, 0);
+  gantryGroup.add(upperTruss);
+
+  const lightBarGeo = trackGeo(new THREE.BoxGeometry(halfWidth * 1.88, 0.3, 2.0));
   const lightBar = new THREE.Mesh(lightBarGeo, gantryGlowMat);
-  lightBar.position.set(0, 9.7, 0);
+  lightBar.position.set(0, 9.8, 0);
   gantryGroup.add(lightBar);
+
+  // Overhead HYPERION GP Banner facing approaching racers
+  const bannerGeo = trackGeo(new THREE.PlaneGeometry(14.0, 3.1));
+  const bannerMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      map: textures.gantryBannerTexture,
+      side: THREE.DoubleSide,
+    })
+  );
+  const bannerFront = new THREE.Mesh(bannerGeo, bannerMat);
+  bannerFront.position.set(0, 10.7, -1.0);
+  bannerFront.rotation.y = Math.PI;
+  gantryGroup.add(bannerFront);
+
+  // 5 Race Signal Light Pods beneath main gantry bridge
+  const signalPodGeo = trackGeo(new THREE.CylinderGeometry(0.28, 0.28, 0.25, 12));
+  signalPodGeo.rotateX(Math.PI / 2);
+  [-3.2, -1.6, 0, 1.6, 3.2].forEach((sx) => {
+    const pod = new THREE.Mesh(signalPodGeo, gantryGlowMat);
+    pod.position.set(sx, 9.25, -0.92);
+    gantryGroup.add(pod);
+  });
   group.add(gantryGroup);
 
-  // Holographic Speed Arches along circuit (10 arches; Orbital gets grand gold-cyan double-halo portals)
+  // Holographic Speed Arches along circuit (10 sculpted portals with stanchion bases)
   const archCount = 10;
-  const archFrameGeo = trackGeo(new THREE.TorusGeometry(halfWidth + 0.6, 0.24, 8, 28, Math.PI));
+  const archFrameGeo = trackGeo(new THREE.TorusGeometry(halfWidth + 0.65, 0.26, 8, 28, Math.PI));
+  const archInnerGeo = trackGeo(new THREE.TorusGeometry(halfWidth + 0.15, 0.11, 6, 28, Math.PI));
+  const archFootGeo = trackGeo(new THREE.BoxGeometry(0.9, 1.9, 1.1));
   const archFrameMat = trackMat(
     new THREE.MeshStandardMaterial({
       color: 0x0f172a,
       emissive: courseSpec.railEmissive,
-      emissiveIntensity: 1.35,
-      metalness: 0.7,
-      roughness: 0.25,
+      emissiveIntensity: 1.45,
+      metalness: 0.72,
+      roughness: 0.24,
     })
   );
+  const archFootMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x162238,
+      metalness: 0.8,
+      roughness: 0.3,
+    })
+  );
+  const archFootInst = new THREE.InstancedMesh(archFootGeo, archFootMat, archCount * 2);
   const orbitalGrandOuterGeo =
     courseId === 'orbital'
       ? trackGeo(new THREE.TorusGeometry(halfWidth + 2.6, 0.34, 8, 32, Math.PI))
@@ -518,7 +662,7 @@ export function createTrack(
           new THREE.MeshStandardMaterial({
             color: 0xfbbf24,
             emissive: 0xf59e0b,
-            emissiveIntensity: 1.8,
+            emissiveIntensity: 1.85,
             metalness: 0.6,
             roughness: 0.2,
           })
@@ -528,12 +672,34 @@ export function createTrack(
   for (let a = 1; a <= archCount; a++) {
     const idx = Math.floor((a / (archCount + 1)) * SAMPLE_COUNT);
     const s = samples[idx];
-    const arch = new THREE.Mesh(archFrameGeo, archFrameMat);
     const archLeft = s.right.clone().negate();
     const mat4 = new THREE.Matrix4().makeBasis(archLeft, s.up, s.tangent);
+
+    const arch = new THREE.Mesh(archFrameGeo, archFrameMat);
     arch.quaternion.setFromRotationMatrix(mat4);
     arch.position.copy(s.position).addScaledVector(s.up, 0.2);
     group.add(arch);
+
+    const innerArch = new THREE.Mesh(archInnerGeo, gantryGlowMat);
+    innerArch.quaternion.setFromRotationMatrix(mat4);
+    innerArch.position.copy(s.position).addScaledVector(s.up, 0.2);
+    group.add(innerArch);
+
+    stanchionDummy.quaternion.setFromRotationMatrix(mat4);
+    stanchionDummy.scale.set(1, 1, 1);
+    stanchionDummy.position
+      .copy(s.position)
+      .addScaledVector(s.right, -(halfWidth + 0.65))
+      .addScaledVector(s.up, 0.9);
+    stanchionDummy.updateMatrix();
+    archFootInst.setMatrixAt((a - 1) * 2, stanchionDummy.matrix);
+
+    stanchionDummy.position
+      .copy(s.position)
+      .addScaledVector(s.right, halfWidth + 0.65)
+      .addScaledVector(s.up, 0.9);
+    stanchionDummy.updateMatrix();
+    archFootInst.setMatrixAt((a - 1) * 2 + 1, stanchionDummy.matrix);
 
     if (orbitalGrandOuterGeo && orbitalGrandGoldMat && a % 3 === 0) {
       const grandArch = new THREE.Mesh(orbitalGrandOuterGeo, orbitalGrandGoldMat);
@@ -542,8 +708,11 @@ export function createTrack(
       group.add(grandArch);
     }
   }
+  archFootInst.instanceMatrix.needsUpdate = true;
+  archFootInst.computeBoundingSphere();
+  group.add(archFootInst);
 
-  // Boost Pads (14 glowing chevron accelerators across center & outer lanes, clear of quiz gates at 0.48 and 0.95)
+  // Boost Pads (16 glowing chevron accelerators with 3D glowing side guide rails)
   const boostPadSpecs = [
     { s: 0.08, lateral: 0.0 },
     { s: 0.11, lateral: -0.76 },
@@ -571,34 +740,65 @@ export function createTrack(
       map: textures.boostPadTexture,
       emissiveMap: textures.boostPadTexture,
       emissive: new THREE.Color(courseSpec.railColor),
-      emissiveIntensity: 1.6,
-      roughness: 0.25,
+      emissiveIntensity: 1.75,
+      roughness: 0.22,
       polygonOffset: true,
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -2,
     })
   );
+  const bpRailGeo = trackGeo(new THREE.BoxGeometry(0.18, 0.18, 10.7));
+  const bpRailMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: courseSpec.railEmissive,
+      emissiveIntensity: 2.2,
+      roughness: 0.2,
+    })
+  );
+  const bpRailInst = new THREE.InstancedMesh(bpRailGeo, bpRailMat, boostPadSpecs.length * 2);
 
-  for (const spec of boostPadSpecs) {
+  boostPadSpecs.forEach((spec, bIdx) => {
     const idx = Math.floor(spec.s * SAMPLE_COUNT) % SAMPLE_COUNT;
     const s = samples[idx];
     const padMesh = new THREE.Mesh(bpGeo, bpMat);
     const padLeft = s.right.clone().negate();
     const m4 = new THREE.Matrix4().makeBasis(padLeft, s.up, s.tangent);
+    const latOffset = spec.lateral * (halfWidth - 2.6);
     padMesh.quaternion.setFromRotationMatrix(m4);
     padMesh.position
       .copy(s.position)
-      .addScaledVector(s.right, spec.lateral * (halfWidth - 2.6))
+      .addScaledVector(s.right, latOffset)
       .addScaledVector(s.up, 0.035);
     group.add(padMesh);
+
+    stanchionDummy.quaternion.setFromRotationMatrix(m4);
+    stanchionDummy.scale.set(1, 1, 1);
+    stanchionDummy.position
+      .copy(s.position)
+      .addScaledVector(s.right, latOffset - 1.98)
+      .addScaledVector(s.up, 0.09);
+    stanchionDummy.updateMatrix();
+    bpRailInst.setMatrixAt(bIdx * 2, stanchionDummy.matrix);
+
+    stanchionDummy.position
+      .copy(s.position)
+      .addScaledVector(s.right, latOffset + 1.98)
+      .addScaledVector(s.up, 0.09);
+    stanchionDummy.updateMatrix();
+    bpRailInst.setMatrixAt(bIdx * 2 + 1, stanchionDummy.matrix);
+
     boostPads.push({
       s: spec.s,
-      lateral: spec.lateral * (halfWidth - 2.6),
+      lateral: latOffset,
       width: 3.8,
       length: 10.5,
       mesh: padMesh,
     });
-  }
+  });
+  bpRailInst.instanceMatrix.needsUpdate = true;
+  bpRailInst.computeBoundingSphere();
+  group.add(bpRailInst);
 
   // Aero Float Pads (9 per course across center & outer lanes, placed clear of quiz gates at 0.48 & 0.95)
   const floatPadSpecsByCourse: Record<CourseId, { s: number; lateral: number }[]> = {
@@ -658,7 +858,7 @@ export function createTrack(
       map: textures.floatPadTexture,
       emissiveMap: textures.floatPadTexture,
       emissive: new THREE.Color(0x2dd4bf),
-      emissiveIntensity: 1.9,
+      emissiveIntensity: 2.0,
       roughness: 0.2,
       polygonOffset: true,
       polygonOffsetFactor: -2,
@@ -674,39 +874,74 @@ export function createTrack(
       depthWrite: false,
     })
   );
-  const fpHaloGeo = trackGeo(new THREE.TorusGeometry(2.3, 0.09, 8, 24, Math.PI));
+  const fpHaloGeo = trackGeo(new THREE.TorusGeometry(2.35, 0.09, 8, 24, Math.PI));
+  const fpPylonGeo = trackGeo(new THREE.BoxGeometry(0.24, 0.55, 11.4));
+  const fpPylonMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: 0x134e4a,
+      emissive: 0x14b8a6,
+      emissiveIntensity: 1.5,
+      metalness: 0.7,
+      roughness: 0.25,
+    })
+  );
+  const fpPylonInst = new THREE.InstancedMesh(fpPylonGeo, fpPylonMat, floatPadSpecs.length * 2);
 
-  for (const spec of floatPadSpecs) {
+  floatPadSpecs.forEach((spec, fIdx) => {
     const idx = Math.floor(spec.s * SAMPLE_COUNT) % SAMPLE_COUNT;
     const s = samples[idx];
     const padLeft = s.right.clone().negate();
     const m4 = new THREE.Matrix4().makeBasis(padLeft, s.up, s.tangent);
+    const latOffset = spec.lateral * (halfWidth - 2.8);
 
     const padMesh = new THREE.Mesh(fpGeo, fpMat);
     padMesh.quaternion.setFromRotationMatrix(m4);
     padMesh.position
       .copy(s.position)
-      .addScaledVector(s.right, spec.lateral * (halfWidth - 2.8))
+      .addScaledVector(s.right, latOffset)
       .addScaledVector(s.up, 0.04);
     group.add(padMesh);
 
-    // Subtle floating holographic updraft arch above the pad to distinguish from Boost Pads
-    const gateHalo = new THREE.Mesh(fpHaloGeo, fpGateMat);
-    gateHalo.quaternion.setFromRotationMatrix(m4);
-    gateHalo.position
+    // Side teal updraft emitter rails
+    stanchionDummy.quaternion.setFromRotationMatrix(m4);
+    stanchionDummy.scale.set(1, 1, 1);
+    stanchionDummy.position
       .copy(s.position)
-      .addScaledVector(s.right, spec.lateral * (halfWidth - 2.8))
-      .addScaledVector(s.up, 0.25);
-    group.add(gateHalo);
+      .addScaledVector(s.right, latOffset - 2.3)
+      .addScaledVector(s.up, 0.24);
+    stanchionDummy.updateMatrix();
+    fpPylonInst.setMatrixAt(fIdx * 2, stanchionDummy.matrix);
+
+    stanchionDummy.position
+      .copy(s.position)
+      .addScaledVector(s.right, latOffset + 2.3)
+      .addScaledVector(s.up, 0.24);
+    stanchionDummy.updateMatrix();
+    fpPylonInst.setMatrixAt(fIdx * 2 + 1, stanchionDummy.matrix);
+
+    // Twin staggered floating holographic updraft arches above the pad
+    [-2.4, 2.4].forEach((zOff) => {
+      const gateHalo = new THREE.Mesh(fpHaloGeo, fpGateMat);
+      gateHalo.quaternion.setFromRotationMatrix(m4);
+      gateHalo.position
+        .copy(s.position)
+        .addScaledVector(s.right, latOffset)
+        .addScaledVector(s.tangent, zOff)
+        .addScaledVector(s.up, 0.35);
+      group.add(gateHalo);
+    });
 
     floatPads.push({
       s: spec.s,
-      lateral: spec.lateral * (halfWidth - 2.8),
+      lateral: latOffset,
       width: 4.4,
       length: 11.2,
       mesh: padMesh,
     });
-  }
+  });
+  fpPylonInst.instanceMatrix.needsUpdate = true;
+  fpPylonInst.computeBoundingSphere();
+  group.add(fpPylonInst);
 
   // Track Support Pylons (skip floating pylons for Sky City so skyway feels suspended in air!)
   const dummy = new THREE.Object3D();
@@ -769,6 +1004,18 @@ export function createTrack(
     podInst.computeBoundingSphere();
     group.add(podInst);
   }
+
+  // Animation target hooks for lightweight per-frame track & landmark motion
+  const animatedReactorRings: THREE.Mesh[] = [];
+  const animatedRadarDishes: { mesh: THREE.Mesh; phase: number }[] = [];
+  const animatedSkyIslands: {
+    group: THREE.Group;
+    baseY: number;
+    halo: THREE.Mesh;
+    phase: number;
+  }[] = [];
+  let orbitalMainRing: THREE.Mesh | null = null;
+  let orbitalSecondaryHalo: THREE.Mesh | null = null;
 
   // Course-Specific Environment World Builder
   if (courseId === 'oceanic') {
@@ -882,6 +1129,7 @@ export function createTrack(
       const ring = new THREE.Mesh(plantCoreRingGeo, plantReactorMat);
       ring.position.y = 22;
       plant.add(ring);
+      animatedReactorRings.push(ring);
 
       const spire = new THREE.Mesh(plantSpireGeo, plantShellMat);
       spire.position.y = 44;
@@ -891,6 +1139,7 @@ export function createTrack(
       beacon.scale.setScalar(0.28);
       beacon.position.y = 70;
       plant.add(beacon);
+      animatedReactorRings.push(beacon);
 
       group.add(plant);
     }
@@ -994,7 +1243,8 @@ export function createTrack(
       [centerX - 680, centerZ + 380],
       [centerX + 220, centerZ + 220],
     ];
-    for (const [bx, bz] of baseLocations) {
+    for (let bIdx = 0; bIdx < baseLocations.length; bIdx++) {
+      const [bx, bz] = baseLocations[bIdx];
       if (!isClearOfTrack(bx, bz, samples, 72)) continue;
       const base = new THREE.Group();
       base.position.set(bx, FLOOR_Y, bz);
@@ -1019,6 +1269,7 @@ export function createTrack(
       dish.position.set(22, 48, -12);
       dish.rotation.x = Math.PI * 0.68;
       base.add(dish);
+      animatedRadarDishes.push({ mesh: dish, phase: bIdx * 1.35 });
 
       group.add(base);
     }
@@ -1057,6 +1308,46 @@ export function createTrack(
     solarInst.instanceMatrix.needsUpdate = true;
     solarInst.computeBoundingSphere();
     group.add(solarInst);
+
+    // 5. Rugged Lunar Basalt Crater Rim Outcrops (InstancedMesh)
+    const rockCount = 56;
+    const rockGeo = trackGeo(new THREE.DodecahedronGeometry(1, 0));
+    const rockMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: 0x2b3242,
+        roughness: 0.94,
+        metalness: 0.08,
+        flatShading: true,
+      })
+    );
+    const rockInst = new THREE.InstancedMesh(rockGeo, rockMat, rockCount);
+    let rocksPlaced = 0;
+    let rockAttempt = 0;
+    while (rocksPlaced < rockCount && rockAttempt < 800) {
+      rockAttempt++;
+      const angle = ((rockAttempt * 222.49) % 360) * (Math.PI / 180);
+      const dist = 165 + ((rockAttempt * 113) % 1380);
+      const rx = centerX + Math.cos(angle) * dist;
+      const rz = centerZ + Math.sin(angle) * dist;
+      if (!isClearOfTrack(rx, rz, samples, 52)) continue;
+
+      const rad = 11 + ((rockAttempt * 17) % 24);
+      const ryScale = rad * (0.42 + ((rockAttempt * 7) % 5) * 0.08);
+      dummy.position.set(rx, FLOOR_Y + ryScale * 0.35, rz);
+      dummy.rotation.set(
+        ((rockAttempt * 19) % 10) * 0.08,
+        angle,
+        ((rockAttempt * 11) % 10) * 0.08
+      );
+      dummy.scale.set(rad * 1.25, ryScale, rad * 0.95);
+      dummy.updateMatrix();
+      rockInst.setMatrixAt(rocksPlaced, dummy.matrix);
+      rocksPlaced++;
+    }
+    rockInst.count = rocksPlaced;
+    rockInst.instanceMatrix.needsUpdate = true;
+    rockInst.computeBoundingSphere();
+    group.add(rockInst);
   } else if (courseId === 'skycity') {
     // 1. Dual Cloud-Sea Atmospheric Horizon
     const cloudGeo = trackGeo(new THREE.PlaneGeometry(7600, 7600));
@@ -1157,7 +1448,8 @@ export function createTrack(
       [centerX + 420, centerZ + 60, 40],
       [centerX - 480, centerZ - 480, 30],
     ];
-    for (const [cx, cz, cy] of citadelCoords) {
+    for (let cIdx = 0; cIdx < citadelCoords.length; cIdx++) {
+      const [cx, cz, cy] = citadelCoords[cIdx];
       if (!isClearOfTrack(cx, cz, samples, 72)) continue;
       const island = new THREE.Group();
       island.position.set(cx, cy, cz);
@@ -1177,6 +1469,13 @@ export function createTrack(
       const spire = new THREE.Mesh(crystalSpireGeo, spireVioletMat);
       spire.position.y = 40;
       island.add(spire);
+
+      animatedSkyIslands.push({
+        group: island,
+        baseY: cy,
+        halo,
+        phase: cIdx * 1.15,
+      });
 
       group.add(island);
     }
@@ -1254,6 +1553,8 @@ export function createTrack(
       ringGoldMat
     );
     secondaryHalo.rotation.set(0.32, -0.45, 0.2);
+    orbitalMainRing = innerGlowRing;
+    orbitalSecondaryHalo = secondaryHalo;
     megaRingGroup.add(outerSteelRing, innerGlowRing, secondaryHalo);
     group.add(megaRingGroup);
 
@@ -1471,6 +1772,43 @@ export function createTrack(
     return { s: refinedS, lateral };
   };
 
+  const update = (dt: number, elapsed: number) => {
+    // Scroll Boost & Float Pad chevrons forward cleanly without extra draw calls
+    textures.boostPadTexture.offset.y =
+      (((textures.boostPadTexture.offset.y - dt * 1.85) % 1) + 1) % 1;
+    textures.floatPadTexture.offset.y =
+      (((textures.floatPadTexture.offset.y - dt * 1.45) % 1) + 1) % 1;
+    fpGateMat.opacity = 0.56 + Math.sin(elapsed * 4.2) * 0.22;
+
+    if (courseId === 'oceanic') {
+      textures.oceanSurfaceTexture.offset.x =
+        (((textures.oceanSurfaceTexture.offset.x + dt * 0.014) % 1) + 1) % 1;
+      for (const ring of animatedReactorRings) {
+        ring.rotation.y += dt * 0.45;
+      }
+    } else if (courseId === 'lunar') {
+      for (const entry of animatedRadarDishes) {
+        entry.mesh.rotation.y = Math.sin(elapsed * 0.45 + entry.phase) * 0.55;
+      }
+    } else if (courseId === 'skycity') {
+      textures.skyCloudsTexture.offset.x =
+        (((textures.skyCloudsTexture.offset.x + dt * 0.008) % 1) + 1) % 1;
+      textures.skyCloudsTexture.offset.y =
+        (((textures.skyCloudsTexture.offset.y + dt * 0.004) % 1) + 1) % 1;
+      for (const isl of animatedSkyIslands) {
+        isl.group.position.y = isl.baseY + Math.sin(elapsed * 0.7 + isl.phase) * 3.2;
+        isl.halo.rotation.y += dt * 0.35;
+      }
+    } else {
+      if (orbitalMainRing) {
+        orbitalMainRing.rotation.z += dt * 0.035;
+      }
+      if (orbitalSecondaryHalo) {
+        orbitalSecondaryHalo.rotation.z -= dt * 0.05;
+      }
+    }
+  };
+
   return {
     courseId,
     courseKey: courseSpec.courseKey,
@@ -1484,6 +1822,7 @@ export function createTrack(
     worldToMinimap,
     sampleAtS,
     findClosestS,
+    update,
     dispose: () => {
       geometries.forEach((g) => g.dispose());
       materials.forEach((m) => m.dispose());

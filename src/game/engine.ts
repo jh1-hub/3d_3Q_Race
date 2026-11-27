@@ -405,7 +405,7 @@ export class RaceEngine {
     this.textures = createProceduralTextures(this.maxAnisotropy);
     this.track = createTrack(this.courseKey, this.textures, this.isSoftwareGl);
     scene.add(this.track.group);
-    this.itemSystem = new TrackItemSystem(scene, this.track, this.maxAnisotropy);
+    this.itemSystem = new TrackItemSystem(scene, this.track, this.maxAnisotropy, this.textures);
 
     // Speed-dust starfield particle box around track
     const dustCount = 340;
@@ -559,7 +559,7 @@ export class RaceEngine {
 
     this.track = createTrack(this.courseKey, this.textures, this.isSoftwareGl);
     this.scene.add(this.track.group);
-    this.itemSystem = new TrackItemSystem(this.scene, this.track, this.maxAnisotropy);
+    this.itemSystem = new TrackItemSystem(this.scene, this.track, this.maxAnisotropy, this.textures);
     this.itemSystem.setShowItems(this.gameMode !== 'time_attack');
 
     this.camInitialized = false;
@@ -787,7 +787,7 @@ export class RaceEngine {
       {
         id: 'ai-1',
         name: 'SOLARIS-7',
-        chassisStyle: 'tempest',
+        chassisStyle: 'solaris',
         body: 0x312e81,
         secondary: 0xf59e0b,
         accent: 0xfbbf24,
@@ -800,7 +800,7 @@ export class RaceEngine {
       {
         id: 'ai-2',
         name: 'CRIMSON-IX',
-        chassisStyle: 'phantom',
+        chassisStyle: 'crimson',
         body: 0x1e293b,
         secondary: 0xef4444,
         accent: 0xf43f5e,
@@ -813,7 +813,7 @@ export class RaceEngine {
       {
         id: 'ai-3',
         name: 'AERO-TITAN',
-        chassisStyle: 'valkyrie',
+        chassisStyle: 'titan',
         body: 0x064e3b,
         secondary: 0xd1fae5,
         accent: 0x10b981,
@@ -831,7 +831,9 @@ export class RaceEngine {
       playerSpec.accentColor,
       this.textures.contactShadow,
       castShadow,
-      playerSpec.chassisStyle
+      playerSpec.chassisStyle,
+      null,
+      this.textures
     );
     this.scene.add(playerModel.root);
 
@@ -889,7 +891,9 @@ export class RaceEngine {
           cfg.accent,
           this.textures.contactShadow,
           castShadow,
-          cfg.chassisStyle
+          cfg.chassisStyle,
+          null,
+          this.textures
         );
         this.scene.add(model.root);
         this.racers.push({
@@ -983,7 +987,8 @@ export class RaceEngine {
         this.textures.contactShadow,
         false,
         spec.chassisStyle,
-        0.38
+        0.38,
+        this.textures
       );
       model.root.visible = isRaceView && this.showBestGhost;
       this.scene.add(model.root);
@@ -999,7 +1004,8 @@ export class RaceEngine {
         this.textures.contactShadow,
         false,
         spec.chassisStyle,
-        0.26
+        0.26,
+        this.textures
       );
       model.root.visible = isRaceView && this.showLastGhost;
       this.scene.add(model.root);
@@ -1187,6 +1193,7 @@ export class RaceEngine {
     }
 
     this.totalElapsedSec += dt;
+    this.track.update(dt, this.totalElapsedSec);
     this.itemSystem.update(dt, this.totalElapsedSec);
 
     if (this.eventNoticeTimer > 0) {

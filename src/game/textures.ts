@@ -4,9 +4,14 @@ export interface ProceduralTextures {
   trackAlbedo: THREE.CanvasTexture;
   trackEmissive: THREE.CanvasTexture;
   trackRoughness: THREE.CanvasTexture;
+  trackBump: THREE.CanvasTexture;
   startFinishAlbedo: THREE.CanvasTexture;
   boostPadTexture: THREE.CanvasTexture;
   floatPadTexture: THREE.CanvasTexture;
+  cornerChevronTexture: THREE.CanvasTexture;
+  gantryBannerTexture: THREE.CanvasTexture;
+  gatePadTexture: THREE.CanvasTexture;
+  approachRunwayTexture: THREE.CanvasTexture;
   buildingEmissive: THREE.CanvasTexture;
   groundGridTexture: THREE.CanvasTexture;
   oceanSurfaceTexture: THREE.CanvasTexture;
@@ -14,6 +19,11 @@ export interface ProceduralTextures {
   skyCloudsTexture: THREE.CanvasTexture;
   contactShadow: THREE.CanvasTexture;
   particleGlow: THREE.CanvasTexture;
+  hullPanelBump: THREE.CanvasTexture;
+  hullPanelRoughness: THREE.CanvasTexture;
+  carbonWeaveAlbedo: THREE.CanvasTexture;
+  carbonWeaveBump: THREE.CanvasTexture;
+  titaniumBrushedBump: THREE.CanvasTexture;
   dispose: () => void;
 }
 
@@ -122,6 +132,36 @@ export function createProceduralTextures(maxAnisotropy: number): ProceduralTextu
   rCtx.fillRect(118, 0, 20, 256);
   const trackRoughness = register(new THREE.CanvasTexture(roughCanvas), false);
 
+  // 3b. Track Bump Map (composite road seams, magnetic center ribs & curb grooves)
+  const tbTrackCanvas = document.createElement('canvas');
+  tbTrackCanvas.width = 512;
+  tbTrackCanvas.height = 512;
+  const tbCtx = tbTrackCanvas.getContext('2d')!;
+  tbCtx.fillStyle = '#909090';
+  tbCtx.fillRect(0, 0, 512, 512);
+  // Subtle brushed road grip lines
+  for (let x = 44; x < 468; x += 12) {
+    tbCtx.fillStyle = x % 24 === 0 ? '#9c9c9c' : '#858585';
+    tbCtx.fillRect(x, 0, 3, 512);
+  }
+  // Recessed plate seams
+  tbCtx.fillStyle = '#404040';
+  for (let y = 0; y < 512; y += 64) {
+    tbCtx.fillRect(0, y, 512, 3);
+  }
+  for (let x = 64; x < 512; x += 128) {
+    tbCtx.fillRect(x, 0, 3, 512);
+  }
+  // Raised magnetic center rail & edge curbs
+  tbCtx.fillStyle = '#c8c8c8';
+  tbCtx.fillRect(248, 0, 16, 512);
+  for (let y = 0; y < 512; y += 64) {
+    tbCtx.fillStyle = '#d4d4d4';
+    tbCtx.fillRect(8, y + 6, 18, 44);
+    tbCtx.fillRect(486, y + 6, 18, 44);
+  }
+  const trackBump = register(new THREE.CanvasTexture(tbTrackCanvas), false);
+
   // 4. Start / Finish Line Texture
   const sfCanvas = document.createElement('canvas');
   sfCanvas.width = 512;
@@ -141,55 +181,162 @@ export function createProceduralTextures(maxAnisotropy: number): ProceduralTextu
   startFinishAlbedo.wrapS = THREE.ClampToEdgeWrapping;
   startFinishAlbedo.wrapT = THREE.ClampToEdgeWrapping;
 
-  // 5. Boost Pad Chevron Texture
+  // 5. Boost Pad Chevron Texture (seamless 128px vertical period for smooth UV scroll)
   const bpCanvas = document.createElement('canvas');
   bpCanvas.width = 256;
   bpCanvas.height = 512;
   const bpCtx = bpCanvas.getContext('2d')!;
-  bpCtx.fillStyle = '#061526';
+  bpCtx.fillStyle = '#041222';
   bpCtx.fillRect(0, 0, 256, 512);
-  bpCtx.strokeStyle = '#22d3ee';
-  bpCtx.lineWidth = 14;
-  for (let y = 70; y < 480; y += 110) {
+  // Subtle longitudinal energy rails
+  bpCtx.fillStyle = '#082f49';
+  bpCtx.fillRect(10, 0, 16, 512);
+  bpCtx.fillRect(230, 0, 16, 512);
+  bpCtx.fillStyle = '#38bdf8';
+  bpCtx.fillRect(16, 0, 4, 512);
+  bpCtx.fillRect(236, 0, 4, 512);
+  // Repeating seamless glowing chevrons (4 per 512px tile, exact 128px step)
+  for (let y = 0; y < 512; y += 128) {
+    bpCtx.strokeStyle = 'rgba(34, 211, 238, 0.35)';
+    bpCtx.lineWidth = 24;
     bpCtx.beginPath();
-    bpCtx.moveTo(32, y + 60);
-    bpCtx.lineTo(128, y);
-    bpCtx.lineTo(224, y + 60);
+    bpCtx.moveTo(36, y + 86);
+    bpCtx.lineTo(128, y + 22);
+    bpCtx.lineTo(220, y + 86);
+    bpCtx.stroke();
+
+    bpCtx.strokeStyle = '#67e8f9';
+    bpCtx.lineWidth = 11;
+    bpCtx.beginPath();
+    bpCtx.moveTo(36, y + 86);
+    bpCtx.lineTo(128, y + 22);
+    bpCtx.lineTo(220, y + 86);
     bpCtx.stroke();
   }
-  bpCtx.strokeStyle = '#06b6d4';
-  bpCtx.lineWidth = 8;
-  bpCtx.strokeRect(8, 8, 240, 496);
   const boostPadTexture = register(new THREE.CanvasTexture(bpCanvas), true);
 
-  // 5b. Aero Float Pad Texture (teal anti-grav wing rings & updraft chevrons)
+  // 5b. Aero Float Pad Texture (seamless 128px period mint-teal levitation ellipses & updraft glyphs)
   const fpCanvas = document.createElement('canvas');
   fpCanvas.width = 256;
   fpCanvas.height = 512;
   const fpCtx = fpCanvas.getContext('2d')!;
-  fpCtx.fillStyle = '#031d1c';
+  fpCtx.fillStyle = '#021b1b';
   fpCtx.fillRect(0, 0, 256, 512);
-  // Soft mint-teal levitation ellipses
-  for (let y = 84; y < 460; y += 112) {
-    fpCtx.strokeStyle = 'rgba(94, 234, 212, 0.42)';
+  fpCtx.fillStyle = '#14b8a6';
+  fpCtx.fillRect(12, 0, 5, 512);
+  fpCtx.fillRect(239, 0, 5, 512);
+  for (let y = 0; y < 512; y += 128) {
+    fpCtx.strokeStyle = 'rgba(94, 234, 212, 0.45)';
     fpCtx.lineWidth = 6;
     fpCtx.beginPath();
-    fpCtx.ellipse(128, y + 26, 86, 26, 0, 0, Math.PI * 2);
+    fpCtx.ellipse(128, y + 72, 84, 24, 0, 0, Math.PI * 2);
     fpCtx.stroke();
 
-    // Updraft wing V-glyph
     fpCtx.strokeStyle = '#5eead4';
-    fpCtx.lineWidth = 12;
+    fpCtx.lineWidth = 11;
     fpCtx.beginPath();
-    fpCtx.moveTo(44, y + 36);
-    fpCtx.lineTo(128, y - 6);
-    fpCtx.lineTo(212, y + 36);
+    fpCtx.moveTo(46, y + 76);
+    fpCtx.lineTo(128, y + 24);
+    fpCtx.lineTo(210, y + 76);
     fpCtx.stroke();
   }
-  fpCtx.strokeStyle = '#2dd4bf';
-  fpCtx.lineWidth = 10;
-  fpCtx.strokeRect(8, 8, 240, 496);
   const floatPadTexture = register(new THREE.CanvasTexture(fpCanvas), true);
+
+  // 5c. Corner Turn Warning Chevron Board (256x128)
+  const ccCanvas = document.createElement('canvas');
+  ccCanvas.width = 256;
+  ccCanvas.height = 128;
+  const ccCtx = ccCanvas.getContext('2d')!;
+  ccCtx.fillStyle = '#0a0f1c';
+  ccCtx.fillRect(0, 0, 256, 128);
+  ccCtx.strokeStyle = '#f59e0b';
+  ccCtx.lineWidth = 5;
+  ccCtx.strokeRect(4, 4, 248, 120);
+  // Three bold forward-directional chevrons pointing right (+X)
+  for (let cx = 42; cx <= 178; cx += 68) {
+    ccCtx.strokeStyle = cx === 110 ? '#fde047' : '#f59e0b';
+    ccCtx.lineWidth = 14;
+    ccCtx.beginPath();
+    ccCtx.moveTo(cx, 24);
+    ccCtx.lineTo(cx + 38, 64);
+    ccCtx.lineTo(cx, 104);
+    ccCtx.stroke();
+  }
+  const cornerChevronTexture = register(new THREE.CanvasTexture(ccCanvas), true);
+  cornerChevronTexture.wrapS = THREE.ClampToEdgeWrapping;
+  cornerChevronTexture.wrapT = THREE.ClampToEdgeWrapping;
+
+  // 5d. Start / Finish Gantry Overhead Banner (512x128)
+  const gbCanvas = document.createElement('canvas');
+  gbCanvas.width = 512;
+  gbCanvas.height = 128;
+  const gbCtx = gbCanvas.getContext('2d')!;
+  gbCtx.fillStyle = '#070b14';
+  gbCtx.fillRect(0, 0, 512, 128);
+  gbCtx.strokeStyle = '#22d3ee';
+  gbCtx.lineWidth = 4;
+  gbCtx.strokeRect(4, 4, 504, 120);
+  // Diagonal racing accent bars on ends
+  for (let i = 0; i < 4; i++) {
+    gbCtx.fillStyle = i % 2 === 0 ? '#06b6d4' : '#f59e0b';
+    gbCtx.fillRect(14 + i * 14, 16, 8, 96);
+    gbCtx.fillRect(490 - i * 14, 16, 8, 96);
+  }
+  gbCtx.fillStyle = '#f8fafc';
+  gbCtx.font = 'bold 38px "Chakra Petch", sans-serif';
+  gbCtx.textAlign = 'center';
+  gbCtx.textBaseline = 'middle';
+  gbCtx.fillText('HYPERION GP', 256, 52);
+  gbCtx.fillStyle = '#38bdf8';
+  gbCtx.font = 'bold 16px "Chakra Petch", sans-serif';
+  gbCtx.fillText('ANTI-GRAVITY GRAND PRIX // START GRID', 256, 94);
+  const gantryBannerTexture = register(new THREE.CanvasTexture(gbCanvas), true);
+  gantryBannerTexture.wrapS = THREE.ClampToEdgeWrapping;
+  gantryBannerTexture.wrapT = THREE.ClampToEdgeWrapping;
+
+  // 5e. Quiz Gate Holographic Floor Pad (256x256)
+  const gpCanvas = document.createElement('canvas');
+  gpCanvas.width = 256;
+  gpCanvas.height = 256;
+  const gpCtx = gpCanvas.getContext('2d')!;
+  gpCtx.clearRect(0, 0, 256, 256);
+  gpCtx.fillStyle = 'rgba(255, 255, 255, 0.14)';
+  gpCtx.fillRect(12, 12, 232, 232);
+  gpCtx.strokeStyle = '#ffffff';
+  gpCtx.lineWidth = 8;
+  gpCtx.strokeRect(14, 14, 228, 228);
+  gpCtx.lineWidth = 4;
+  gpCtx.beginPath();
+  gpCtx.arc(128, 128, 76, 0, Math.PI * 2);
+  gpCtx.stroke();
+  gpCtx.beginPath();
+  gpCtx.moveTo(64, 152);
+  gpCtx.lineTo(128, 86);
+  gpCtx.lineTo(192, 152);
+  gpCtx.stroke();
+  const gatePadTexture = register(new THREE.CanvasTexture(gpCanvas), true);
+  gatePadTexture.wrapS = THREE.ClampToEdgeWrapping;
+  gatePadTexture.wrapT = THREE.ClampToEdgeWrapping;
+
+  // 5f. Quiz Gate Approach Runway Guide Chevrons (128x256, seamless repeat)
+  const arCanvas = document.createElement('canvas');
+  arCanvas.width = 128;
+  arCanvas.height = 256;
+  const arCtx = arCanvas.getContext('2d')!;
+  arCtx.clearRect(0, 0, 128, 256);
+  arCtx.fillStyle = 'rgba(14, 165, 233, 0.16)';
+  arCtx.fillRect(10, 0, 4, 256);
+  arCtx.fillRect(114, 0, 4, 256);
+  arCtx.strokeStyle = 'rgba(56, 189, 248, 0.55)';
+  arCtx.lineWidth = 7;
+  for (let y = 0; y < 256; y += 64) {
+    arCtx.beginPath();
+    arCtx.moveTo(26, y + 48);
+    arCtx.lineTo(64, y + 16);
+    arCtx.lineTo(102, y + 48);
+    arCtx.stroke();
+  }
+  const approachRunwayTexture = register(new THREE.CanvasTexture(arCanvas), true, 1, 3);
 
   // 6. Building Emissive Window Grid
   const bCanvas = document.createElement('canvas');
@@ -336,13 +483,194 @@ export function createProceduralTextures(maxAnisotropy: number): ProceduralTextu
   particleGlow.wrapS = THREE.ClampToEdgeWrapping;
   particleGlow.wrapT = THREE.ClampToEdgeWrapping;
 
+  // 13. Machine Hull Aerospace Panel Seam & Rivet Bump / Roughness Maps (512x512)
+  const hpBumpCanvas = document.createElement('canvas');
+  hpBumpCanvas.width = 512;
+  hpBumpCanvas.height = 512;
+  const hpb = hpBumpCanvas.getContext('2d')!;
+  hpb.fillStyle = '#c8c8c8';
+  hpb.fillRect(0, 0, 512, 512);
+
+  const hpRoughCanvas = document.createElement('canvas');
+  hpRoughCanvas.width = 512;
+  hpRoughCanvas.height = 512;
+  const hpr = hpRoughCanvas.getContext('2d')!;
+  hpr.fillStyle = '#404040';
+  hpr.fillRect(0, 0, 512, 512);
+
+  // Subtle metallic micro-grain across plates
+  for (let i = 0; i < 900; i++) {
+    const x = (i * 97) % 512;
+    const y = (i * 193) % 512;
+    hpb.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)';
+    hpb.fillRect(x, y, 6, 2);
+  }
+
+  // Slight tonal variation between adjacent aerospace armor panels
+  const panelRects: [number, number, number, number, string, string][] = [
+    [0, 0, 256, 192, '#d2d2d2', '#383838'],
+    [256, 0, 256, 192, '#bebebe', '#4c4c4c'],
+    [0, 192, 160, 160, '#c2c2c2', '#464646'],
+    [160, 192, 192, 160, '#d6d6d6', '#343434'],
+    [352, 192, 160, 160, '#c0c0c0', '#4a4a4a'],
+    [0, 352, 256, 160, '#cacaca', '#3e3e3e'],
+    [256, 352, 256, 160, '#d0d0d0', '#3a3a3a'],
+  ];
+  for (const [x, y, w, h, bCol, rCol] of panelRects) {
+    hpb.fillStyle = bCol;
+    hpb.fillRect(x + 2, y + 2, w - 4, h - 4);
+    hpr.fillStyle = rCol;
+    hpr.fillRect(x + 2, y + 2, w - 4, h - 4);
+  }
+
+  // Crisp recessed panel seams (orthogonal + angled aero cuts)
+  const drawSeam = (x1: number, y1: number, x2: number, y2: number, width = 3) => {
+    hpb.strokeStyle = '#323232';
+    hpb.lineWidth = width;
+    hpb.beginPath();
+    hpb.moveTo(x1, y1);
+    hpb.lineTo(x2, y2);
+    hpb.stroke();
+
+    hpb.strokeStyle = '#ececec';
+    hpb.lineWidth = 1;
+    hpb.beginPath();
+    hpb.moveTo(x1 + 1, y1 + 1);
+    hpb.lineTo(x2 + 1, y2 + 1);
+    hpb.stroke();
+
+    hpr.strokeStyle = '#a8a8a8';
+    hpr.lineWidth = width + 1;
+    hpr.beginPath();
+    hpr.moveTo(x1, y1);
+    hpr.lineTo(x2, y2);
+    hpr.stroke();
+  };
+
+  drawSeam(0, 192, 512, 192, 3);
+  drawSeam(0, 352, 512, 352, 3);
+  drawSeam(256, 0, 256, 192, 3);
+  drawSeam(160, 192, 160, 352, 2.5);
+  drawSeam(352, 192, 352, 352, 2.5);
+  drawSeam(256, 352, 256, 512, 3);
+  // Angled technical access hatch seams
+  drawSeam(48, 32, 208, 32, 2);
+  drawSeam(208, 32, 228, 156, 2);
+  drawSeam(228, 156, 36, 156, 2);
+  drawSeam(36, 156, 48, 32, 2);
+  drawSeam(288, 384, 464, 384, 2);
+  drawSeam(464, 384, 480, 480, 2);
+  drawSeam(480, 480, 272, 480, 2);
+  drawSeam(272, 480, 288, 384, 2);
+
+  // Cooling louver slits inside middle panel
+  for (let ly = 224; ly <= 320; ly += 16) {
+    drawSeam(192, ly, 320, ly, 2.5);
+  }
+
+  // Micro flush rivets along main seams
+  const rivetPositions: [number, number][] = [];
+  for (let rx = 24; rx < 512; rx += 32) {
+    rivetPositions.push([rx, 184], [rx, 200], [rx, 344], [rx, 360]);
+  }
+  for (let ry = 24; ry < 192; ry += 32) {
+    rivetPositions.push([248, ry], [264, ry]);
+  }
+  for (const [rx, ry] of rivetPositions) {
+    hpb.fillStyle = '#555555';
+    hpb.beginPath();
+    hpb.arc(rx, ry, 2.1, 0, Math.PI * 2);
+    hpb.fill();
+    hpb.fillStyle = '#e5e5e5';
+    hpb.beginPath();
+    hpb.arc(rx - 0.5, ry - 0.5, 0.9, 0, Math.PI * 2);
+    hpb.fill();
+  }
+
+  const hullPanelBump = register(new THREE.CanvasTexture(hpBumpCanvas), false);
+  const hullPanelRoughness = register(new THREE.CanvasTexture(hpRoughCanvas), false);
+
+  // 14. 2x2 Twill Carbon Fiber Weave (128x128)
+  const cwCanvas = document.createElement('canvas');
+  cwCanvas.width = 128;
+  cwCanvas.height = 128;
+  const cwc = cwCanvas.getContext('2d')!;
+  const cwBumpCanvas = document.createElement('canvas');
+  cwBumpCanvas.width = 128;
+  cwBumpCanvas.height = 128;
+  const cwbc = cwBumpCanvas.getContext('2d')!;
+
+  const cellSz = 8;
+  for (let gy = 0; gy < 128; gy += cellSz) {
+    for (let gx = 0; gx < 128; gx += cellSz) {
+      const ix = gx / cellSz;
+      const iy = gy / cellSz;
+      const phase = (ix + iy) % 4;
+      const isWarp = phase < 2;
+      if (isWarp) {
+        const gradW = cwc.createLinearGradient(gx, gy, gx + cellSz, gy);
+        gradW.addColorStop(0, '#0b101b');
+        gradW.addColorStop(0.5, '#1e293b');
+        gradW.addColorStop(1, '#0b101b');
+        cwc.fillStyle = gradW;
+        cwc.fillRect(gx, gy, cellSz, cellSz);
+
+        const gradB = cwbc.createLinearGradient(gx, gy, gx + cellSz, gy);
+        gradB.addColorStop(0, '#404040');
+        gradB.addColorStop(0.5, '#dcdcdc');
+        gradB.addColorStop(1, '#404040');
+        cwbc.fillStyle = gradB;
+        cwbc.fillRect(gx, gy, cellSz, cellSz);
+      } else {
+        const gradW = cwc.createLinearGradient(gx, gy, gx, gy + cellSz);
+        gradW.addColorStop(0, '#090e17');
+        gradW.addColorStop(0.5, '#162032');
+        gradW.addColorStop(1, '#090e17');
+        cwc.fillStyle = gradW;
+        cwc.fillRect(gx, gy, cellSz, cellSz);
+
+        const gradB = cwbc.createLinearGradient(gx, gy, gx, gy + cellSz);
+        gradB.addColorStop(0, '#363636');
+        gradB.addColorStop(0.5, '#b8b8b8');
+        gradB.addColorStop(1, '#363636');
+        cwbc.fillStyle = gradB;
+        cwbc.fillRect(gx, gy, cellSz, cellSz);
+      }
+    }
+  }
+  const carbonWeaveAlbedo = register(new THREE.CanvasTexture(cwCanvas), true);
+  const carbonWeaveBump = register(new THREE.CanvasTexture(cwBumpCanvas), false);
+
+  // 15. Brushed Titanium Anisotropic Streak Bump (128x128)
+  const tbCanvas = document.createElement('canvas');
+  tbCanvas.width = 128;
+  tbCanvas.height = 128;
+  const tbc = tbCanvas.getContext('2d')!;
+  tbc.fillStyle = '#808080';
+  tbc.fillRect(0, 0, 128, 128);
+  for (let y = 0; y < 128; y++) {
+    const shade = 104 + ((y * 53 + (y % 5) * 19) % 52);
+    tbc.fillStyle = `rgb(${shade},${shade},${shade})`;
+    tbc.fillRect(0, y, 128, 1);
+  }
+  //Machined collar grooves
+  tbc.fillStyle = '#383838';
+  tbc.fillRect(0, 28, 128, 3);
+  tbc.fillRect(0, 96, 128, 3);
+  const titaniumBrushedBump = register(new THREE.CanvasTexture(tbCanvas), false);
+
   return {
     trackAlbedo,
     trackEmissive,
     trackRoughness,
+    trackBump,
     startFinishAlbedo,
     boostPadTexture,
     floatPadTexture,
+    cornerChevronTexture,
+    gantryBannerTexture,
+    gatePadTexture,
+    approachRunwayTexture,
     buildingEmissive,
     groundGridTexture,
     oceanSurfaceTexture,
@@ -350,6 +678,11 @@ export function createProceduralTextures(maxAnisotropy: number): ProceduralTextu
     skyCloudsTexture,
     contactShadow,
     particleGlow,
+    hullPanelBump,
+    hullPanelRoughness,
+    carbonWeaveAlbedo,
+    carbonWeaveBump,
+    titaniumBrushedBump,
     dispose: () => {
       created.forEach((t) => t.dispose());
     },
