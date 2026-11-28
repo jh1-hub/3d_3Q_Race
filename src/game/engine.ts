@@ -21,6 +21,7 @@ import {
   MachineSpec,
   MinimapMarker,
   MissedQuizReview,
+  PlayerModelDetail,
   QuizFeedbackTelemetry,
   RacerStanding,
   RaceTelemetry,
@@ -252,6 +253,7 @@ export class RaceEngine {
   private courseKey = 'orbital';
   private courseId: CourseId = 'orbital';
   private machineId: MachineId = 'phantom';
+  private playerModelDetail: PlayerModelDetail = 'ultra';
   private speedClass: SpeedClass = 'normal';
 
   private racers: RacerState[] = [];
@@ -610,6 +612,16 @@ export class RaceEngine {
     }
   }
 
+  public setPlayerModelDetail(detail: PlayerModelDetail): void {
+    if (this.playerModelDetail === detail) return;
+    this.playerModelDetail = detail;
+    if (this.phase === 'menu') {
+      this.buildRacers();
+      this.resetGridPositions();
+      this.emitTelemetry();
+    }
+  }
+
   public setSpeedClass(cls: SpeedClass): void {
     if (this.speedClass === cls) return;
     this.speedClass = cls;
@@ -833,7 +845,8 @@ export class RaceEngine {
       castShadow,
       playerSpec.chassisStyle,
       null,
-      this.textures
+      this.textures,
+      this.playerModelDetail
     );
     this.scene.add(playerModel.root);
 
@@ -2767,6 +2780,7 @@ export class RaceEngine {
     for (const flame of r.model.thrusterFlames) {
       flame.scale.set(flameRadius, flameRadius, flameScale);
     }
+    r.model.updateBoosters?.(safeDt, this.totalElapsedSec, Math.min(1, r.speed / 120), boosting);
     r.model.boostGlowMaterial.emissiveIntensity = glowActive ? 4.4 : boosting ? 3.9 : 2.0;
   }
 

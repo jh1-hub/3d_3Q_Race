@@ -7,6 +7,7 @@ import {
   Loader2,
   Music,
   Settings,
+  Sparkles,
   Timer,
   Trophy,
   Volume2,
@@ -18,6 +19,7 @@ import {
   COURSES,
   GameMode,
   MACHINES,
+  PlayerModelDetail,
   resolveSubCourse,
   SpeedClass,
   SUB_ITEMS,
@@ -41,6 +43,7 @@ interface SettingsModalProps {
   onClose: () => void;
   onToggleBgm: () => void;
   onToggleSfx: () => void;
+  onSelectPlayerModelDetail: (detail: PlayerModelDetail) => void;
 }
 
 type SettingsTab = 'audio' | 'rankings' | 'guide';
@@ -54,6 +57,7 @@ export function SettingsModal({
   onClose,
   onToggleBgm,
   onToggleSfx,
+  onSelectPlayerModelDetail,
 }: SettingsModalProps) {
   const [tab, setTab] = useState<SettingsTab>('audio');
   const [rankingCourseId, setRankingCourseId] = useState<CourseId>(() =>
@@ -155,7 +159,7 @@ export function SettingsModal({
             }`}
           >
             <Music className="h-4 w-4 shrink-0" />
-            <span>サウンド</span>
+            <span>サウンド・表示</span>
           </button>
           <button
             type="button"
@@ -244,6 +248,49 @@ export function SettingsModal({
                     {settings.sfxEnabled ? 'ON' : 'OFF'}
                   </span>
                 </button>
+              </div>
+
+              {/* Player Machine Detail Tier Selector */}
+              <div className="rounded-xl border border-white/10 bg-slate-900/60 p-3.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 shrink-0 text-cyan-400" />
+                    <span className="text-sm font-bold text-white">自機モデル品質</span>
+                  </div>
+                  <span className="text-[11px] text-slate-400">
+                    重い場合は現行モデルに戻せます
+                  </span>
+                </div>
+                <div className="mt-2.5 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onSelectPlayerModelDetail('ultra')}
+                    className={`min-h-[44px] rounded-lg border px-3 py-2 text-left transition-colors cursor-pointer ${
+                      settings.playerModelDetail === 'ultra'
+                        ? 'border-cyan-400/70 bg-cyan-500/15 text-white'
+                        : 'border-white/10 bg-slate-950/60 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <div className="text-xs font-bold">ハイクオリティ</div>
+                    <div className="mt-0.5 text-[10px] text-slate-400">
+                      高精細パーツ＋可動ブースター
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectPlayerModelDetail('standard')}
+                    className={`min-h-[44px] rounded-lg border px-3 py-2 text-left transition-colors cursor-pointer ${
+                      settings.playerModelDetail === 'standard'
+                        ? 'border-amber-400/70 bg-amber-500/15 text-white'
+                        : 'border-white/10 bg-slate-950/60 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <div className="text-xs font-bold">スタンダード（現行）</div>
+                    <div className="mt-0.5 text-[10px] text-slate-400">
+                      軽量・従来モデル
+                    </div>
+                  </button>
+                </div>
               </div>
 
               {/* Clean Single PWA Download Button (No upfront clutter) */}

@@ -2,6 +2,8 @@ import { quizCategories } from '../data/quizData';
 
 export type MachineId = 'valkyrie' | 'tempest' | 'phantom';
 
+export type PlayerModelDetail = 'ultra' | 'standard';
+
 export type ChassisStyle = 'valkyrie' | 'tempest' | 'phantom' | 'solaris' | 'crimson' | 'titan';
 
 export type SpeedClass = 'normal' | 'hard';

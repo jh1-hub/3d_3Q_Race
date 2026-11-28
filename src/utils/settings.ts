@@ -1,3 +1,5 @@
+import { PlayerModelDetail } from '../game/types';
+
 export type RaceBgmId = 'kiokuyouryou-no-uta';
 
 export type RaceBgmSelection = 'random' | RaceBgmId;
@@ -28,6 +30,7 @@ export interface GameSettings {
   raceBgm: RaceBgmSelection;
   showBestGhost: boolean;
   showLastGhost: boolean;
+  playerModelDetail: PlayerModelDetail;
 }
 
 const SETTINGS_STORAGE_KEY = 'hyperion_gp_settings_v1';
@@ -39,6 +42,7 @@ const DEFAULT_SETTINGS: GameSettings = {
   raceBgm: 'random',
   showBestGhost: true,
   showLastGhost: true,
+  playerModelDetail: 'ultra',
 };
 
 const VALID_TRACK_IDS = new Set<string>(RACE_BGM_TRACKS.map((t) => t.id));
@@ -62,6 +66,7 @@ export function loadGameSettings(): GameSettings {
           : 'random',
       showBestGhost: typeof parsed.showBestGhost === 'boolean' ? parsed.showBestGhost : true,
       showLastGhost: typeof parsed.showLastGhost === 'boolean' ? parsed.showLastGhost : true,
+      playerModelDetail: parsed.playerModelDetail === 'standard' ? 'standard' : 'ultra',
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { ChassisStyle } from './types';
+import { ChassisStyle, PlayerModelDetail } from './types';
 
 export interface MachineSurfaceTextures {
   hullPanelBump: THREE.Texture;
@@ -21,6 +21,7 @@ export interface HypercarModel {
   hoverHalo: THREE.Mesh;
   spinSparkRing: THREE.Group;
   boostAura: THREE.Group;
+  updateBoosters?: (dt: number, elapsed: number, speedRatio: number, boosting: boolean) => void;
   dispose: () => void;
 }
 
@@ -174,6 +175,103 @@ function makeCenteredExtrude(
 }
 
 /**
+ * Builds a single merged 6-blade titanium turbine impeller + center spinner cone for thruster throats.
+ */
+function createTurbineRotorGeometry(radius: number): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  const mat4 = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const e = new THREE.Euler();
+  const p = new THREE.Vector3();
+  const s = new THREE.Vector3(1, 1, 1);
+
+  const hub = new THREE.CylinderGeometry(radius * 0.22, radius * 0.22, 0.06, 12).toNonIndexed();
+  hub.rotateX(Math.PI / 2);
+  parts.push(hub);
+
+  const cone = new THREE.ConeGeometry(radius * 0.21, 0.13, 10).toNonIndexed();
+  cone.rotateX(-Math.PI / 2);
+  cone.translate(0, 0, -0.075);
+  parts.push(cone);
+
+  const bladeTemplate = new THREE.BoxGeometry(radius * 0.56, radius * 0.16, 0.022).toNonIndexed();
+  for (let i = 0; i < 6; i++) {
+    const angle = (i * Math.PI) / 3;
+    const blade = bladeTemplate.clone();
+    // Pitch blade around X first, then place radially around Z
+    e.set(0.46, 0, 0);
+    q.setFromEuler(e);
+    p.set(radius * 0.44, 0, 0);
+    mat4.compose(p, q, s);
+    blade.applyMatrix4(mat4);
+
+    e.set(0, 0, angle);
+    q.setFromEuler(e);
+    p.set(0, 0, 0);
+    mat4.compose(p, q, s);
+    blade.applyMatrix4(mat4);
+    parts.push(blade);
+  }
+  bladeTemplate.dispose();
+
+  for (const part of parts) {
+    for (const k of Object.keys(part.attributes)) {
+      if (k !== 'position' && k !== 'normal' && k !== 'uv') part.deleteAttribute(k);
+    }
+  }
+  const merged = mergeGeometries(parts, false);
+  parts.forEach((part) => part.dispose());
+  const out = merged ?? new THREE.BoxGeometry(radius, radius, 0.05);
+  out.computeVertexNormals();
+  applyBoxUVs(out, 0.9);
+  return out;
+}
+
+/**
+ * Builds an 8-petal articulated titanium exhaust vectoring iris collar merged into 1 BufferGeometry.
+ */
+function createVectorIrisGeometry(radius: number): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  const mat4 = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const e = new THREE.Euler();
+  const p = new THREE.Vector3();
+  const s = new THREE.Vector3(1, 1, 1);
+
+  const petalTemplate = new THREE.BoxGeometry(radius * 0.52, 0.042, 0.19).toNonIndexed();
+  for (let i = 0; i < 8; i++) {
+    const angle = (i * Math.PI) / 4;
+    const petal = petalTemplate.clone();
+    // Tilt petal inward slightly aft so it forms a tapered jet nozzle collar
+    e.set(-0.22, 0, 0);
+    q.setFromEuler(e);
+    p.set(0, radius * 0.91, 0);
+    mat4.compose(p, q, s);
+    petal.applyMatrix4(mat4);
+
+    e.set(0, 0, angle);
+    q.setFromEuler(e);
+    p.set(0, 0, 0);
+    mat4.compose(p, q, s);
+    petal.applyMatrix4(mat4);
+    parts.push(petal);
+  }
+  petalTemplate.dispose();
+
+  for (const part of parts) {
+    for (const k of Object.keys(part.attributes)) {
+      if (k !== 'position' && k !== 'normal' && k !== 'uv') part.deleteAttribute(k);
+    }
+  }
+  const merged = mergeGeometries(parts, false);
+  parts.forEach((part) => part.dispose());
+  const out = merged ?? new THREE.TorusGeometry(radius * 0.9, 0.03, 6, 16);
+  out.computeVertexNormals();
+  applyBoxUVs(out, 0.9);
+  return out;
+}
+
+/**
  * Builds one of six distinct composite futuristic anti-grav hypercar silhouettes
  * (Player: 'valkyrie', 'tempest', 'phantom'; Rivals: 'solaris', 'crimson', 'titan')
  * with merged-per-material PBR geometry, procedural panel/carbon micro-detail, layered cockpits,
@@ -187,11 +285,15 @@ export function createHypercarMesh(
   castShadow: boolean,
   chassisStyle: ChassisStyle = 'valkyrie',
   ghostOpacity: number | null = null,
-  machineTextures?: MachineSurfaceTextures
+  machineTextures?: MachineSurfaceTextures,
+  detailTier: PlayerModelDetail = 'ultra'
 ): HypercarModel {
   const isGhost = ghostOpacity !== null;
   const gOpacity = ghostOpacity ?? 1;
   const effectiveCastShadow = isGhost ? false : castShadow;
+  const isPlayerChassis =
+    chassisStyle === 'phantom' || chassisStyle === 'valkyrie' || chassisStyle === 'tempest';
+  const isUltraPlayer = !isGhost && detailTier === 'ultra' && isPlayerChassis;
 
   const root = new THREE.Group();
   const chassisGroup = new THREE.Group();
@@ -477,6 +579,14 @@ export function createHypercarMesh(
   };
 
   const thrusterFlames: THREE.Mesh[] = [];
+  const animatedBoosters: {
+    rotor: THREE.Mesh;
+    iris: THREE.Mesh;
+    plasmaRing: THREE.Mesh;
+    baseRingZ: number;
+    phase: number;
+    sign: number;
+  }[] = [];
 
   // Shared multi-stage turbine levitation pod geometries (disposed after bucketing)
   const podHousingGeo = new THREE.LatheGeometry(
@@ -505,6 +615,86 @@ export function createHypercarMesh(
     addPart('carbon', podStatorRingGeo, px, py - 0.07 * scale, pz, 0, 0, 0, scale, scale, scale, 'box');
     addPart('accentGlow', podOuterCoilGeo, px, py - 0.12 * scale, pz, 0, 0, 0, scale, scale, scale, 'box');
     addPart('accentGlow', podInnerCoreGeo, px, py - 0.125 * scale, pz, 0, 0, 0, scale, scale, scale, 'box');
+  };
+
+  // Ultra Player Cockpit Interior & Mechanical Suspension Wishbones (merged into shared buckets -> 0 extra draw calls)
+  const _armStart = new THREE.Vector3();
+  const _armEnd = new THREE.Vector3();
+  const _armDir = new THREE.Vector3();
+  const _armUp = new THREE.Vector3(0, 1, 0);
+  const _armQuat = new THREE.Quaternion();
+  const _armEuler = new THREE.Euler();
+
+  const addStrutBetween = (
+    bucket: BucketKey,
+    x1: number,
+    y1: number,
+    z1: number,
+    x2: number,
+    y2: number,
+    z2: number,
+    radius: number
+  ) => {
+    _armStart.set(x1, y1, z1);
+    _armEnd.set(x2, y2, z2);
+    _armDir.subVectors(_armEnd, _armStart);
+    const len = _armDir.length();
+    if (len < 0.02) return;
+    _armDir.normalize();
+    _armQuat.setFromUnitVectors(_armUp, _armDir);
+    _armEuler.setFromQuaternion(_armQuat);
+    const strut = new THREE.CylinderGeometry(radius, radius * 1.1, len, 6);
+    addPart(
+      bucket,
+      strut,
+      (x1 + x2) * 0.5,
+      (y1 + y2) * 0.5,
+      (z1 + z2) * 0.5,
+      _armEuler.x,
+      _armEuler.y,
+      _armEuler.z
+    );
+    strut.dispose();
+  };
+
+  const addUltraPodStruts = (
+    podX: number,
+    podZ: number,
+    podY: number,
+    hullEdgeX: number,
+    hullAttachY: number
+  ) => {
+    const sign = podX >= 0 ? 1 : -1;
+    const innerPodX = podX - sign * 0.18;
+    addStrutBetween('titanium', innerPodX, podY + 0.08, podZ + 0.16, hullEdgeX, hullAttachY, podZ + 0.04, 0.032);
+    addStrutBetween('titanium', innerPodX, podY + 0.08, podZ - 0.16, hullEdgeX, hullAttachY, podZ - 0.04, 0.032);
+    addStrutBetween('carbon', innerPodX, podY + 0.02, podZ, hullEdgeX, hullAttachY - 0.06, podZ, 0.044);
+  };
+
+  const addUltraCockpitInterior = (floorY: number, cz: number, widthScale: number) => {
+    const backrest = new THREE.BoxGeometry(0.42 * widthScale, 0.26, 0.09);
+    addPart('cockpitInterior', backrest, 0, floorY + 0.13, cz - 0.34, -0.24, 0, 0);
+    backrest.dispose();
+
+    const headrest = new THREE.BoxGeometry(0.24 * widthScale, 0.13, 0.085);
+    addPart('titanium', headrest, 0, floorY + 0.27, cz - 0.4, -0.18, 0, 0);
+    headrest.dispose();
+
+    const bolster = new THREE.BoxGeometry(0.08, 0.2, 0.24);
+    [-1, 1].forEach((s) =>
+      addPart('cockpitInterior', bolster, s * 0.23 * widthScale, floorY + 0.12, cz - 0.24, -0.2, 0, s * -0.12)
+    );
+    bolster.dispose();
+
+    const yoke = new THREE.BoxGeometry(0.048, 0.11, 0.055);
+    [-1, 1].forEach((s) => addPart('carbon', yoke, s * 0.14 * widthScale, floorY + 0.11, cz + 0.34, 0.18, 0, 0));
+    yoke.dispose();
+
+    const hudWing = new THREE.BoxGeometry(0.13, 0.022, 0.03);
+    [-1, 1].forEach((s) =>
+      addPart('accentGlow', hudWing, s * 0.18 * widthScale, floorY + 0.16, cz + 0.56, -0.32, s * -0.24, 0)
+    );
+    hudWing.dispose();
   };
 
   // Shared multi-stage afterburner nozzle helper
@@ -550,6 +740,34 @@ export function createHypercarMesh(
     innerLinerGeo.dispose();
     coreDiskGeo.dispose();
     petalRingGeo.dispose();
+
+    if (isUltraPlayer) {
+      // Articulated Rear Boost Mechanism: spinning turbine impeller + breathing vectoring iris + floating plasma ring
+      const rotorGeo = trackGeo(createTurbineRotorGeometry(nozzleRadius * 0.72));
+      const rotorMesh = new THREE.Mesh(rotorGeo, brushedTitaniumMat);
+      rotorMesh.position.set(tx, ty, tz - nozzleLen * 0.25);
+      chassisGroup.add(rotorMesh);
+
+      const irisGeo = trackGeo(createVectorIrisGeometry(nozzleRadius * 0.94));
+      const irisMesh = new THREE.Mesh(irisGeo, brushedTitaniumMat);
+      irisMesh.position.set(tx, ty, tz - nozzleLen * 0.48);
+      chassisGroup.add(irisMesh);
+
+      const stabRingGeo = trackGeo(new THREE.TorusGeometry(nozzleRadius * 0.96, 0.022, 8, 24));
+      const plasmaRingMesh = new THREE.Mesh(stabRingGeo, accentGlowMat);
+      const baseRingZ = tz - nozzleLen * 0.62;
+      plasmaRingMesh.position.set(tx, ty, baseRingZ);
+      chassisGroup.add(plasmaRingMesh);
+
+      animatedBoosters.push({
+        rotor: rotorMesh,
+        iris: irisMesh,
+        plasmaRing: plasmaRingMesh,
+        baseRingZ,
+        phase: animatedBoosters.length * 1.45,
+        sign: tx < 0 ? -1 : 1,
+      });
+    }
 
     const flame = new THREE.Mesh(flameGeo, flameMat);
     flame.position.set(tx, ty, tz - nozzleLen * 0.48);
@@ -793,6 +1011,75 @@ export function createHypercarMesh(
     coreFlameGeo.translate(0, 0, -0.75);
 
     [-0.46, 0.46].forEach((tx) => addAfterburner(tx, 0.06, -2.58, 0.3, 0.48, 0.24, 1.55, flameGeo, coreFlameGeo));
+
+    if (isUltraPlayer) {
+      addUltraCockpitInterior(0.32, 0.05, 0.92);
+      [
+        [-0.86, 1.45, -0.42],
+        [0.86, 1.45, 0.42],
+        [-1.36, -1.45, -0.52],
+        [1.36, -1.45, 0.52],
+      ].forEach(([px, pz, edgeX]) => addUltraPodStruts(px, pz, -0.16, edgeX, -0.1));
+
+      // Nose telemetry pitot mast & cheek cooling louvers
+      const pitotGeo = new THREE.CylinderGeometry(0.015, 0.032, 0.42, 8);
+      pitotGeo.rotateX(Math.PI / 2);
+      addPart('titanium', pitotGeo, 0, 0.08, 2.22);
+      pitotGeo.dispose();
+
+      const prongCollarGeo = new THREE.BoxGeometry(0.36, 0.09, 0.12);
+      const prongFlickGeo = new THREE.BoxGeometry(0.24, 0.03, 0.34);
+      const noseLouverGeo = new THREE.BoxGeometry(0.2, 0.035, 0.09);
+      [-1, 1].forEach((side) => {
+        addPart('titanium', prongCollarGeo, side * 0.66, 0.01, 2.74);
+        addPart('carbon', prongFlickGeo, side * 0.46, -0.02, 2.28, 0.12, side * 0.22, 0);
+        [1.32, 1.46].forEach((lz) =>
+          addPart('titanium', noseLouverGeo, side * 0.4, 0.18, lz, -0.22, side * -0.18, 0)
+        );
+      });
+      prongCollarGeo.dispose();
+      prongFlickGeo.dispose();
+      noseLouverGeo.dispose();
+
+      // Canopy structural rib & delta-wing boundary-layer aero fences
+      const canopyPillarGeo = new THREE.BoxGeometry(0.055, 0.05, 0.72);
+      addPart('titanium', canopyPillarGeo, 0, 0.56, 0.42, 0.28, 0, 0);
+      canopyPillarGeo.dispose();
+
+      const wingFenceGeo = new THREE.BoxGeometry(0.04, 0.14, 0.64);
+      const wingRootCuffGeo = new THREE.BoxGeometry(0.08, 0.09, 0.96);
+      [-1, 1].forEach((side) => {
+        addPart('carbon', wingFenceGeo, side * 1.24, 0.1, -1.36, 0, side * -0.18, 0);
+        addPart('titanium', wingRootCuffGeo, side * 0.78, 0.09, -0.45, 0, side * -0.58, 0);
+      });
+      wingFenceGeo.dispose();
+      wingRootCuffGeo.dispose();
+
+      // Dorsal spine cooling ribs + exposed twin titanium turbocharger plenum tubes
+      const gillRibGeo = new THREE.BoxGeometry(0.04, 0.11, 0.16);
+      [-1, 1].forEach((side) => {
+        [-1.32, -1.56, -1.8, -2.04].forEach((gz) =>
+          addPart('titanium', gillRibGeo, side * 0.1, 0.46, gz, 0.2, 0, side * -0.28)
+        );
+      });
+      gillRibGeo.dispose();
+
+      const plenumTubeGeo = new THREE.CylinderGeometry(0.065, 0.075, 1.35, 10);
+      plenumTubeGeo.rotateX(Math.PI / 2);
+      [-0.25, 0.25].forEach((px) => addPart('titanium', plenumTubeGeo, px, 0.34, -1.78, -0.1, 0, 0));
+      plenumTubeGeo.dispose();
+
+      // Rear afterburner upper heat-shield cowl, extra diffuser strakes & F1 brake beacon
+      const rearCowlGeo = new THREE.BoxGeometry(1.36, 0.09, 0.38);
+      addPart('carbon', rearCowlGeo, 0, 0.29, -2.42, -0.12, 0, 0);
+      rearCowlGeo.dispose();
+      const extraStrakeGeo = new THREE.BoxGeometry(0.04, 0.18, 0.48);
+      [-0.38, 0.38].forEach((sx) => addPart('titanium', extraStrakeGeo, sx, -0.09, -2.52));
+      extraStrakeGeo.dispose();
+      const centerBrakeGeo = new THREE.BoxGeometry(0.14, 0.12, 0.07);
+      addPart('tailLight', centerBrakeGeo, 0, 0.03, -2.62);
+      centerBrakeGeo.dispose();
+    }
   } else if (chassisStyle === 'phantom') {
     // =========================================================================
     // PHANTOM-V: Stealth Forward-Swept Fighter + Sensor Pod + Triple Vectoring
@@ -1039,6 +1326,80 @@ export function createHypercarMesh(
       const ty = idx === 1 ? 0.15 : 0.04;
       addAfterburner(tx, ty, -2.18, 0.19, 0.36, 0.15, 1.15, flameGeo, coreFlameGeo);
     });
+
+    if (isUltraPlayer) {
+      addUltraCockpitInterior(0.34, 0.12, 1.0);
+      [
+        [-1.38, 0.75, -0.66],
+        [1.38, 0.75, 0.66],
+        [-1.08, -1.4, -0.62],
+        [1.08, -1.4, 0.62],
+      ].forEach(([px, pz, edgeX]) => addUltraPodStruts(px, pz, -0.16, edgeX, -0.1));
+
+      // Forward stealth canard flicks & chin sensor blister
+      const chinSensorGeo = new THREE.BoxGeometry(0.28, 0.06, 0.36);
+      addPart('titanium', chinSensorGeo, 0, -0.11, 2.02);
+      chinSensorGeo.dispose();
+
+      const frontCanardFlick = new THREE.BoxGeometry(0.26, 0.032, 0.32);
+      const shoulderLouverGeo = new THREE.BoxGeometry(0.24, 0.035, 0.08);
+      const sideVentSlit = new THREE.BoxGeometry(0.055, 0.035, 0.22);
+      [-1, 1].forEach((side) => {
+        addPart('titanium', frontCanardFlick, side * 0.72, -0.02, 1.88, 0.08, side * -0.35, 0);
+        [0.64, 0.78].forEach((lz) =>
+          addPart('titanium', shoulderLouverGeo, side * 0.79, 0.28, lz, -0.18, 0, 0)
+        );
+        [0.14, 0.42].forEach((vz) =>
+          addPart('accentGlow', sideVentSlit, side * 0.99, 0.16, vz, 0.18, 0, 0)
+        );
+      });
+      frontCanardFlick.dispose();
+      shoulderLouverGeo.dispose();
+      sideVentSlit.dispose();
+
+      // Canopy twin diagonal A-pillar struts
+      const aPillarGeo = new THREE.BoxGeometry(0.055, 0.05, 0.82);
+      [-0.36, 0.36].forEach((px) =>
+        addPart('titanium', aPillarGeo, px, 0.52, 0.48, 0.34, px > 0 ? -0.16 : 0.16, 0)
+      );
+      aPillarGeo.dispose();
+
+      // Enhanced tactical dorsal sensor turret cheeks + laser designator visor + rear deck louvers
+      const turretCheekGeo = new THREE.BoxGeometry(0.14, 0.18, 0.78);
+      [-0.27, 0.27].forEach((tx) => addPart('titanium', turretCheekGeo, tx, 0.61, -0.82));
+      turretCheekGeo.dispose();
+      const visorBarGeo = new THREE.BoxGeometry(0.38, 0.032, 0.07);
+      addPart('accentGlow', visorBarGeo, 0, 0.7, -0.62);
+      visorBarGeo.dispose();
+
+      const deckLouverGeo = new THREE.BoxGeometry(0.56, 0.032, 0.08);
+      [-1.34, -1.5, -1.66, -1.82].forEach((lz) =>
+        addPart('titanium', deckLouverGeo, 0, 0.42, lz, 0.16, 0, 0)
+      );
+      deckLouverGeo.dispose();
+
+      // Forward-swept wing root vortex strakes & ECM wingtip pitot needles
+      const rootStrakeGeo = new THREE.BoxGeometry(0.05, 0.13, 0.54);
+      const tipNeedleGeo = new THREE.CylinderGeometry(0.012, 0.025, 0.36, 8);
+      tipNeedleGeo.rotateX(Math.PI / 2);
+      [-1, 1].forEach((side) => {
+        addPart('carbon', rootStrakeGeo, side * 0.9, 0.14, 0.12, 0, side * 0.45, 0);
+        addPart('titanium', tipNeedleGeo, side * 1.9, 0.14, 1.44);
+      });
+      rootStrakeGeo.dispose();
+      tipNeedleGeo.dispose();
+
+      // Triple-nozzle titanium rear heat-shield bridge, vertical brake fangs & outer diffuser fins
+      const heatBridgeGeo = new THREE.BoxGeometry(1.24, 0.085, 0.34);
+      addPart('titanium', heatBridgeGeo, 0, 0.32, -2.06);
+      heatBridgeGeo.dispose();
+      const tailFangGeo = new THREE.BoxGeometry(0.06, 0.2, 0.075);
+      [-0.72, 0.72].forEach((tx) => addPart('tailLight', tailFangGeo, tx, 0.14, -2.18));
+      tailFangGeo.dispose();
+      const outerDiffFinGeo = new THREE.BoxGeometry(0.045, 0.18, 0.42);
+      [-0.72, 0.72].forEach((sx) => addPart('titanium', outerDiffFinGeo, sx, -0.09, -2.1));
+      outerDiffFinGeo.dispose();
+    }
   } else if (chassisStyle === 'valkyrie') {
     // =========================================================================
     // VALKYRIE-X: Pearl Titanium + Deep Cobalt GT Flagship Wedge + Swan-Neck Wing
@@ -1307,6 +1668,83 @@ export function createHypercarMesh(
     coreFlameGeo.translate(0, 0, -0.6);
 
     [-0.44, 0.44].forEach((tx) => addAfterburner(tx, 0.06, -2.38, 0.23, 0.38, 0.17, 1.25, flameGeo, coreFlameGeo));
+
+    if (isUltraPlayer) {
+      addUltraCockpitInterior(0.33, -0.02, 1.0);
+      [
+        [-1.08, 1.25, -0.68],
+        [1.08, 1.25, 0.68],
+        [-1.16, -1.35, -0.7],
+        [1.16, -1.35, 0.7],
+      ].forEach(([px, pz, edgeX]) => addUltraPodStruts(px, pz, -0.16, edgeX, -0.1));
+
+      // Front splitter titanium tie-rods & hood NACA intake recess
+      const tieRodGeo = new THREE.CylinderGeometry(0.018, 0.018, 0.26, 6);
+      [-0.36, 0.36].forEach((tx) => addPart('titanium', tieRodGeo, tx, -0.04, 2.48, -0.35, 0, 0));
+      tieRodGeo.dispose();
+      const hoodNacaGeo = new THREE.BoxGeometry(0.46, 0.04, 0.44);
+      addPart('carbon', hoodNacaGeo, 0, 0.24, 1.56, 0.14, 0, 0);
+      hoodNacaGeo.dispose();
+
+      // Twin-tier front canard dive planes, fender extractor louvers & sidepod aero bargeboards
+      const divePlaneGeo = new THREE.BoxGeometry(0.42, 0.028, 0.26);
+      const fenderGillGeo = new THREE.BoxGeometry(0.24, 0.032, 0.075);
+      const bargeboardGeo = new THREE.BoxGeometry(0.045, 0.22, 0.68);
+      const sideExhaustSlit = new THREE.BoxGeometry(0.055, 0.04, 0.28);
+      [-1, 1].forEach((side) => {
+        addPart('carbon', divePlaneGeo, side * 1.24, 0.09, 1.48, 0.12, side * -0.25, side * 0.08);
+        [0.54, 0.68, 0.82].forEach((lz) =>
+          addPart('titanium', fenderGillGeo, side * 0.88, 0.24, lz, -0.12, 0, 0)
+        );
+        addPart('carbon', bargeboardGeo, side * 1.11, 0.01, 0.56, 0, side * 0.08, 0);
+        addPart('accentGlow', sideExhaustSlit, side * 1.07, 0.11, -0.92);
+      });
+      divePlaneGeo.dispose();
+      fenderGillGeo.dispose();
+      bargeboardGeo.dispose();
+      sideExhaustSlit.dispose();
+
+      // Canopy A-pillar frames & roof scoop intake collar
+      const vPillarGeo = new THREE.BoxGeometry(0.055, 0.05, 0.82);
+      [-0.38, 0.38].forEach((px) =>
+        addPart('titanium', vPillarGeo, px, 0.53, 0.46, 0.3, px > 0 ? -0.15 : 0.15, 0)
+      );
+      vPillarGeo.dispose();
+      const scoopLipGeo = new THREE.BoxGeometry(0.26, 0.12, 0.08);
+      addPart('titanium', scoopLipGeo, 0, 0.72, -0.25);
+      scoopLipGeo.dispose();
+
+      // Rear engine bay louver deck + exposed rear suspension pushrods
+      const engineBayGeo = new THREE.BoxGeometry(0.66, 0.045, 0.78);
+      addPart('carbon', engineBayGeo, 0, 0.37, -1.62, 0.14, 0, 0);
+      engineBayGeo.dispose();
+      const bayLouverGeo = new THREE.BoxGeometry(0.58, 0.03, 0.07);
+      [-1.36, -1.5, -1.64, -1.78, -1.92].forEach((lz) =>
+        addPart('titanium', bayLouverGeo, 0, 0.4 + (-1.36 - lz) * -0.12, lz, 0.24, 0, 0)
+      );
+      bayLouverGeo.dispose();
+
+      const pushrodGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.62, 8);
+      [-1, 1].forEach((side) =>
+        addPart('titanium', pushrodGeo, side * 0.48, 0.29, -1.86, 0.25, 0, side * 0.52)
+      );
+      pushrodGeo.dispose();
+
+      // Swan-neck machined titanium clevis brackets, center DRS actuator pod & rear nozzle shroud
+      const clevisGeo = new THREE.BoxGeometry(0.11, 0.09, 0.36);
+      [-0.62, 0.62].forEach((cx) => addPart('titanium', clevisGeo, cx, 0.89, -2.02));
+      clevisGeo.dispose();
+      const drsPodGeo = new THREE.BoxGeometry(0.16, 0.1, 0.28);
+      addPart('titanium', drsPodGeo, 0, 0.88, -2.14);
+      drsPodGeo.dispose();
+      const drsPodGlow = new THREE.BoxGeometry(0.1, 0.04, 0.06);
+      addPart('accentGlow', drsPodGlow, 0, 0.88, -2.29);
+      drsPodGlow.dispose();
+
+      const tailBezelGeo = new THREE.TorusGeometry(0.15, 0.026, 8, 18);
+      [-0.62, 0.62].forEach((tx) => addPart('titanium', tailBezelGeo, tx, 0.2, -2.44));
+      tailBezelGeo.dispose();
+    }
   } else if (chassisStyle === 'solaris') {
     // =========================================================================
     // SOLARIS-7 (Ace Rival): Catamaran Solar Spear + Gull Wings + Halo Arch
@@ -2151,6 +2589,44 @@ export function createHypercarMesh(
   boostAura.visible = false;
   chassisGroup.add(boostAura);
 
+  const updateBoosters =
+    animatedBoosters.length > 0
+      ? (dt: number, elapsed: number, speedRatio: number, boosting: boolean) => {
+          const spinRate = boosting ? 24.0 : 2.3 + speedRatio * 14.5;
+          const baseAperture = boosting ? 1.16 : 1.0 + speedRatio * 0.07;
+
+          for (let i = 0; i < animatedBoosters.length; i++) {
+            const b = animatedBoosters[i];
+            b.rotor.rotation.z += dt * spinRate * b.sign;
+
+            // Even at 0 km/h idle, vectoring petals subtly breathe & micro-trim
+            const idleBreath = Math.sin(elapsed * 3.1 + b.phase) * (boosting ? 0.055 : 0.038);
+            const sXY = baseAperture + idleBreath;
+            b.iris.scale.set(sXY, sXY, 1);
+            b.iris.rotation.z = Math.sin(elapsed * 2.2 + b.phase) * 0.12;
+
+            // Floating plasma stabilizer ring glides gently aft/fore and shimmers
+            const ringExtend = boosting ? -0.14 : -speedRatio * 0.06;
+            const ringOsc = Math.sin(elapsed * 4.4 + b.phase) * (boosting ? 0.05 : 0.036);
+            b.plasmaRing.position.z = b.baseRingZ + ringExtend + ringOsc;
+            const ringScale = (boosting ? 1.18 : 0.96 + speedRatio * 0.1) + Math.cos(elapsed * 4.4 + b.phase) * 0.05;
+            b.plasmaRing.scale.set(ringScale, ringScale, 1);
+          }
+
+          // Subtle living idle flame shimmer when parked / creeping
+          if (!boosting) {
+            const idleShimmer = 1 + Math.sin(elapsed * 9.5) * 0.11 + Math.cos(elapsed * 15.2) * 0.06;
+            const radShimmer = 1 + Math.sin(elapsed * 8.1) * 0.06;
+            for (let i = 0; i < thrusterFlames.length; i++) {
+              const f = thrusterFlames[i];
+              f.scale.x *= radShimmer;
+              f.scale.y *= radShimmer;
+              f.scale.z *= idleShimmer;
+            }
+          }
+        }
+      : undefined;
+
   return {
     root,
     chassisGroup,
@@ -2162,6 +2638,7 @@ export function createHypercarMesh(
     hoverHalo,
     spinSparkRing,
     boostAura,
+    updateBoosters,
     dispose: () => {
       geometries.forEach((g) => g.dispose());
       materials.forEach((m) => m.dispose());

@@ -5,7 +5,7 @@ import { RaceHud, TouchDragIndicator } from './components/RaceHud';
 import { SettingsModal } from './components/SettingsModal';
 import { BgmManager } from './game/bgm';
 import { RaceEngine } from './game/engine';
-import { GameMode, isMachineUnlocked, MachineId, RaceTelemetry, resolveSubCourse, SpeedClass } from './game/types';
+import { GameMode, isMachineUnlocked, MachineId, PlayerModelDetail, RaceTelemetry, resolveSubCourse, SpeedClass } from './game/types';
 import { CardCollectionMap, TermStats } from './types';
 import { getCollectionProgress, loadCardCollection, loadTermStats } from './utils/cardCollection';
 import { useOnlineStatus } from './utils/pwa';
@@ -145,6 +145,7 @@ export default function App() {
     engine.setMuted(initialSettings.masterMuted);
     engine.setSfxEnabled(initialSettings.sfxEnabled);
     engine.setGhostVisibility(initialSettings.showBestGhost, initialSettings.showLastGhost);
+    engine.setPlayerModelDetail(initialSettings.playerModelDetail);
     engineRef.current = engine;
     setMinimapPoints(engine.getMinimapPoints());
 
@@ -387,6 +388,16 @@ export default function App() {
     });
   }, []);
 
+  const handleSelectPlayerModelDetail = useCallback((detail: PlayerModelDetail) => {
+    setSettings((prev) => {
+      if (prev.playerModelDetail === detail) return prev;
+      const next: GameSettings = { ...prev, playerModelDetail: detail };
+      saveGameSettings(next);
+      engineRef.current?.setPlayerModelDetail(detail);
+      return next;
+    });
+  }, []);
+
   const handleCloseSettings = useCallback(() => {
     setSettingsOpen(false);
     bgmRef.current?.stopPreviewAndResumeMenu(settingsRef.current.raceBgm);
@@ -484,6 +495,7 @@ export default function App() {
         onClose={handleCloseSettings}
         onToggleBgm={handleToggleBgm}
         onToggleSfx={handleToggleSfx}
+        onSelectPlayerModelDetail={handleSelectPlayerModelDetail}
       />
 
       {/* In-Race Unobtrusive HUD */}
